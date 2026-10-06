@@ -1,0 +1,376 @@
+"use client";
+
+import { useState, type FormEvent, type ReactNode } from "react";
+import { BRAND } from "@/lib/brand";
+import { createBackup, isBackupFile, openBackup, passcodeAdvice, WrongPasscodeError, type BackupFile } from "@/lib/crypto";
+import { splitDuplicates, toDraft } from "@/lib/entries";
+import type { EntryDraft } from "@/lib/types";
+import { useVault } from "@/lib/vault";
+import { dangerButton, Field, Icon, inputClass, primaryButton, Screen, secondaryButton, useToast } from "./ui";
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-4 shadow-sm">
+      <h2 className="mb-3 font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+const when = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "never";
+
+export function Settings({ back }: { back: () => void }) {
+  const vault = useVault();
+  return (
+    <Screen title="Settings" onBack={back}>
+      <div className="space-y-4">
+        <BackupSection />
+        <RestoreSection />
+        <Section title="Auto-lock">
+          <Field label="Lock after the app has been in the background for" hint="Idle on screen gets five times as long.">
+            <select
+              className={`${inputClass} appearance-none`}
+              value={vault.meta.autoLockSeconds}
+              onChange={(e) => vault.setMeta({ autoLockSeconds: Number(e.target.value) })}
+            >
+              <option value={0}>Immediately</option>
+              <option value={30}>30 seconds</option>
+              <option value={60}>1 minute</option>
+              <option value={300}>5 minutes</option>
+              <option value={900}>15 minutes</option>
+            </select>
+          </Field>
+        </Section>
+        <PasscodeSection />
+        <Section title="This device">
+          <ul className="space-y-2 text-sm">
+            <li className="flex items-start gap-2">
+              <Icon name={vault.persisted ? "check" : "alert"} size={18} className={`mt-0.5 shrink-0 ${vault.persisted ? "text-ok" : "text-warn"}`} />
+              <span>
+                {vault.persisted
+                  ? "Storage is marked as permanent: the browser won't clear it to free space."
+                  : "The browser may clear this app's storage if space runs low or it goes unused. Install the app to your home screen, and keep a backup."}
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <Icon name="shield" size={18} className="mt-0.5 shrink-0 text-ok" />
+              <span>Accounts and their names are encrypted (AES-256). Nothing leaves this phone. The app makes no network requests with your data.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <Icon name="alert" size={18} className="mt-0.5 shrink-0 text-muted" />
+              <span>Codes depend on this phone&apos;s clock. If codes are rejected, set the date and time to automatic.</span>
+            </li>
+          </ul>
+        </Section>
+        <EraseSection />
+        <p className="pt-2 text-center text-xs text-muted">
+          {BRAND.name} · {vault.entries.length} account{vault.entries.length === 1 ? "" : "s"}
+        </p>
+      </div>
+    </Screen>
+  );
+}
+
+// -- backup -----------------------------------------------------------------
+
+function BackupSection() {
+  const vault = useVault();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const advice = passcodeAdvice(password);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!advice.ok) return setError(advice.note);
+    if (password !== confirm) return setError("The two passwords don't match.");
+    setBusy(true);
+    setError(null);
+    try {
+      const file = await createBackup(vault.entries, password);
+      const name = `${BRAND.name.toLowerCase()}-backup-${file.created.slice(0, 10)}.json`;
+      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+      const asFile = new File([blob], name, { type: "application/json" });
+      // On phones the share sheet is the useful path: save to Files or Drive, or
+      // send it to yourself. Desktop falls back to an ordinary download.
+      if (navigator.canShare?.({ files: [asFile] })) {
+        try {
+          await navigator.share({ files: [asFile], title: name });
+        } catch (err) {
+          if ((err as DOMException).name === "AbortError") {
+            setBusy(false);
+            return; // cancelled: not backed up
+          }
+          download(blob, name);
+        }
+      } else {
+        download(blob, name);
+      }
+      await vault.setMeta({ lastBackupAt: new Date().toISOString() });
+      toast("Backup saved");
+      setOpen(false);
+      setPassword("");
+      setConfirm("");
+    } catch {
+      setError("Couldn't make the backup.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Backup">
+      <p className="mb-3 text-sm text-muted">
+        Last backup: <span className="text-ink">{when(vault.meta.lastBackupAt)}</span>. The file is encrypted with its own password. Keep it
+        somewhere other than this phone.
+      </p>
+      {!open ? (
+        <button onClick={() => setOpen(true)} disabled={!vault.entries.length} className={`${primaryButton} w-full`}>
+          <Icon name="download" size={18} /> Back up {vault.entries.length} account{vault.entries.length === 1 ? "" : "s"}
+        </button>
+      ) : (
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Backup password" hint={password ? advice.note : "Can be the same as your passcode. Without it the file is useless."}>
+            <input type="password" autoComplete="new-password" className={inputClass} value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+          </Field>
+          <Field label="Type it again">
+            <input type="password" autoComplete="new-password" className={inputClass} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </Field>
+          {error && <p className="text-sm text-warn" role="alert">{error}</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setOpen(false)} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button className={`${primaryButton} flex-1`} disabled={busy}>
+              {busy ? "Encrypting…" : "Save backup"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+// -- restore ----------------------------------------------------------------
+
+function RestoreSection() {
+  const vault = useVault();
+  const toast = useToast();
+  const [file, setFile] = useState<BackupFile | null>(null);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [found, setFound] = useState<{ fresh: EntryDraft[]; duplicates: EntryDraft[]; invalid: number } | null>(null);
+
+  async function pick(f: File | undefined) {
+    setError(null);
+    setFound(null);
+    if (!f) return;
+    try {
+      const parsed = JSON.parse(await f.text());
+      if (!isBackupFile(parsed)) throw new Error();
+      setFile(parsed);
+    } catch {
+      setError(`That isn't a ${BRAND.name} backup file.`);
+    }
+  }
+
+  async function unlock(e: FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const raw = await openBackup(file, password);
+      // Decrypting proves the password, not that the contents are sane.
+      const drafts = (Array.isArray(raw) ? raw : []).map(toDraft).filter((d): d is EntryDraft => d !== null);
+      setFound({ ...splitDuplicates(vault.entries, drafts), invalid: (Array.isArray(raw) ? raw.length : 0) - drafts.length });
+    } catch (err) {
+      setError(err instanceof WrongPasscodeError ? "That password doesn't open this backup." : "The backup file is damaged.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore() {
+    if (!found) return;
+    setBusy(true);
+    try {
+      // Added as new entries with fresh ids, so a restored copy never collides with what's here.
+      const n = await vault.add(found.fresh);
+      toast(`Restored ${n} account${n === 1 ? "" : "s"}`);
+      reset();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
+    setFile(null);
+    setPassword("");
+    setFound(null);
+    setError(null);
+  }
+
+  return (
+    <Section title="Restore from backup">
+      {!file ? (
+        <>
+          <p className="mb-3 text-sm text-muted">Adds the accounts from a backup file. Accounts already here are kept and not doubled up.</p>
+          <label className={`${secondaryButton} w-full cursor-pointer`}>
+            <input type="file" accept="application/json,.json" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
+            <Icon name="upload" size={18} /> Choose backup file
+          </label>
+        </>
+      ) : !found ? (
+        <form onSubmit={unlock} className="space-y-3">
+          <p className="text-sm text-muted">
+            Backup from {when(file.created)} · {file.count} account{file.count === 1 ? "" : "s"}
+          </p>
+          <Field label="Backup password">
+            <input type="password" autoComplete="current-password" className={inputClass} value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+          </Field>
+          <div className="flex gap-2">
+            <button type="button" onClick={reset} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button className={`${primaryButton} flex-1`} disabled={busy || !password}>
+              {busy ? "Opening…" : "Open"}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm">
+            <strong>{found.fresh.length}</strong> new account{found.fresh.length === 1 ? "" : "s"} to add
+            {found.duplicates.length > 0 && <span className="text-muted"> · {found.duplicates.length} already here, skipped</span>}
+            {found.invalid > 0 && <span className="text-warn"> · {found.invalid} unreadable, skipped</span>}.
+          </p>
+          <div className="flex gap-2">
+            <button onClick={reset} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button onClick={restore} className={`${primaryButton} flex-1`} disabled={busy || !found.fresh.length}>
+              Add {found.fresh.length}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-3 text-sm text-warn" role="alert">{error}</p>}
+    </Section>
+  );
+}
+
+// -- passcode ---------------------------------------------------------------
+
+function PasscodeSection() {
+  const vault = useVault();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const advice = passcodeAdvice(next);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!advice.ok) return setError(advice.note);
+    if (next !== confirm) return setError("The new passcodes don't match.");
+    setBusy(true);
+    setError(null);
+    try {
+      await vault.changePasscode(current, next);
+      toast("Passcode changed");
+      setOpen(false);
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+    } catch (err) {
+      setError(err instanceof WrongPasscodeError ? "Your current passcode isn't right." : "Couldn't change the passcode.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Passcode">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className={`${secondaryButton} w-full`}>
+          Change passcode
+        </button>
+      ) : (
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Current passcode">
+            <input type="password" autoComplete="current-password" className={inputClass} value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus />
+          </Field>
+          <Field label="New passcode" hint={next ? advice.note : undefined}>
+            <input type="password" autoComplete="new-password" className={inputClass} value={next} onChange={(e) => setNext(e.target.value)} />
+          </Field>
+          <Field label="New passcode again">
+            <input type="password" autoComplete="new-password" className={inputClass} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </Field>
+          {error && <p className="text-sm text-warn" role="alert">{error}</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setOpen(false)} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button className={`${primaryButton} flex-1`} disabled={busy || !current}>
+              {busy ? "Changing…" : "Change"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+// -- erase ------------------------------------------------------------------
+
+function EraseSection() {
+  const vault = useVault();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  return (
+    <Section title="Erase this vault">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className={`${secondaryButton} w-full text-warn`}>
+          Erase everything on this device
+        </button>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm">
+            Every account is deleted from this phone, permanently. Only a backup file can bring them back. Type <strong>ERASE</strong> to
+            confirm.
+          </p>
+          <input className={inputClass} value={typed} onChange={(e) => setTyped(e.target.value)} autoCapitalize="characters" aria-label="Type ERASE to confirm" />
+          <div className="flex gap-2">
+            <button onClick={() => (setOpen(false), setTyped(""))} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button onClick={() => vault.erase()} disabled={typed.trim() !== "ERASE"} className={`${dangerButton} flex-1`}>
+              Erase
+            </button>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+

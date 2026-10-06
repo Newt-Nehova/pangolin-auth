@@ -1,0 +1,237 @@
+"use client";
+
+/**
+ * The vault's live state, shared through React context.
+ *
+ * Locked means: no key and no accounts in memory, only the encrypted blob on
+ * disk. Locking drops both references; there is nothing to "clear" beyond that.
+ *
+ * Saves are chained one after another so two quick edits can never land out
+ * of order and leave the older list on disk.
+ */
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  changePasscode as rewrap,
+  createVault,
+  sealEntries,
+  unlockVault,
+  type VaultBlob,
+} from "./crypto";
+import { DEFAULT_META, loadMeta, loadVault, requestPersistence, saveMeta, saveVault, wipe, type Meta } from "./db";
+import { newEntry } from "./entries";
+import type { Entry, EntryDraft } from "./types";
+
+type Status = "loading" | "new" | "locked" | "open" | "unsupported";
+
+interface VaultApi {
+  status: Status;
+  entries: Entry[];
+  meta: Meta;
+  persisted: boolean | null;
+  create(passcode: string): Promise<void>;
+  unlock(passcode: string): Promise<void>;
+  lock(): void;
+  add(drafts: EntryDraft[]): Promise<number>;
+  update(id: string, patch: Partial<Pick<Entry, "issuer" | "account" | "counter">>): Promise<void>;
+  remove(ids: string[]): Promise<void>;
+  move(id: string, delta: -1 | 1): Promise<void>;
+  /** Replaces every account -- only used by restore-from-backup in "replace" mode. */
+  replaceAll(entries: Entry[]): Promise<void>;
+  changePasscode(current: string, next: string): Promise<void>;
+  setMeta(patch: Partial<Meta>): Promise<void>;
+  erase(): Promise<void>;
+}
+
+const VaultContext = createContext<VaultApi | null>(null);
+
+export function useVault(): VaultApi {
+  const api = useContext(VaultContext);
+  if (!api) throw new Error("useVault outside VaultProvider");
+  return api;
+}
+
+export function VaultProvider({ children }: { children: ReactNode }) {
+  const [status, setStatus] = useState<Status>("loading");
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [meta, setMetaState] = useState<Meta>(DEFAULT_META);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+
+  // Refs hold the authoritative copies so chained saves never see stale state.
+  const blobRef = useRef<VaultBlob | null>(null);
+  const keyRef = useRef<CryptoKey | null>(null);
+  const entriesRef = useRef<Entry[]>([]);
+  const metaRef = useRef<Meta>(DEFAULT_META);
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+
+  useEffect(() => {
+    (async () => {
+      if (!globalThis.crypto?.subtle || !globalThis.indexedDB) {
+        // crypto.subtle only exists on HTTPS or localhost.
+        setStatus("unsupported");
+        return;
+      }
+      const [blob, m] = await Promise.all([loadVault(), loadMeta()]);
+      metaRef.current = m;
+      setMetaState(m);
+      blobRef.current = blob ?? null;
+      setStatus(blob ? "locked" : "new");
+      setPersisted(await requestPersistence().catch(() => null));
+    })().catch(() => setStatus("unsupported"));
+  }, []);
+
+  const lock = useCallback(() => {
+    keyRef.current = null;
+    entriesRef.current = [];
+    setEntries([]);
+    setStatus((s) => (s === "open" ? "locked" : s));
+  }, []);
+
+  /** Queue a write. Every mutation goes through here. */
+  const commit = useCallback(<T,>(work: () => Promise<T>): Promise<T> => {
+    const next = chain.current.then(work, work);
+    chain.current = next.catch(() => undefined);
+    return next;
+  }, []);
+
+  const writeMeta = useCallback(async (patch: Partial<Meta>) => {
+    const m = { ...metaRef.current, ...patch };
+    metaRef.current = m;
+    setMetaState(m);
+    await saveMeta(m);
+  }, []);
+
+  const persist = useCallback(
+    (next: Entry[]) =>
+      commit(async () => {
+        const key = keyRef.current;
+        const blob = blobRef.current;
+        if (!key || !blob) throw new Error("The vault is locked.");
+        const sealed = await sealEntries(blob, key, next);
+        await saveVault(sealed);
+        blobRef.current = sealed;
+        entriesRef.current = next;
+        setEntries(next);
+        await writeMeta({ lastChangeAt: new Date().toISOString() });
+      }),
+    [commit, writeMeta]
+  );
+
+  const api: VaultApi = {
+    status,
+    entries,
+    meta,
+    persisted,
+
+    create: (passcode) =>
+      commit(async () => {
+        const { blob, key } = await createVault(passcode);
+        await saveVault(blob);
+        blobRef.current = blob;
+        keyRef.current = key;
+        entriesRef.current = [];
+        setEntries([]);
+        await writeMeta({ createdAt: new Date().toISOString() });
+        setStatus("open");
+        setPersisted(await requestPersistence().catch(() => null));
+      }),
+
+    unlock: async (passcode) => {
+      const blob = blobRef.current;
+      if (!blob) throw new Error("No vault yet.");
+      const { key, entries: list } = await unlockVault(blob, passcode);
+      keyRef.current = key;
+      entriesRef.current = list;
+      setEntries(list);
+      setStatus("open");
+    },
+
+    lock,
+
+    add: async (drafts) => {
+      const added = drafts.map((d) => newEntry(d));
+      await persist([...entriesRef.current, ...added]);
+      return added.length;
+    },
+
+    update: (id, patch) =>
+      persist(
+        entriesRef.current.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e))
+      ),
+
+    remove: (ids) => persist(entriesRef.current.filter((e) => !ids.includes(e.id))),
+
+    move: (id, delta) => {
+      const list = [...entriesRef.current];
+      const from = list.findIndex((e) => e.id === id);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= list.length) return Promise.resolve();
+      [list[from], list[to]] = [list[to], list[from]];
+      return persist(list);
+    },
+
+    replaceAll: (list) => persist(list),
+
+    changePasscode: (current, next) =>
+      commit(async () => {
+        const blob = blobRef.current;
+        if (!blob) throw new Error("No vault yet.");
+        const rewrapped = await rewrap(blob, current, next);
+        await saveVault(rewrapped);
+        blobRef.current = rewrapped;
+      }),
+
+    setMeta: (patch) => commit(() => writeMeta(patch)),
+
+    erase: () =>
+      commit(async () => {
+        await wipe();
+        blobRef.current = null;
+        keyRef.current = null;
+        entriesRef.current = [];
+        metaRef.current = DEFAULT_META;
+        setEntries([]);
+        setMetaState(DEFAULT_META);
+        setStatus("new");
+      }),
+  };
+
+  // Auto-lock: after time in the background, and after idleness in front.
+  // Time hidden is measured on return rather than with a timer, because
+  // phones suspend timers in background tabs.
+  useEffect(() => {
+    if (status !== "open") return;
+    const limit = meta.autoLockSeconds;
+    if (limit <= 0) return;
+    let hiddenAt: number | null = null;
+    let lastActive = Date.now();
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt !== null) {
+        if (Date.now() - hiddenAt >= limit * 1000) lock();
+        hiddenAt = null;
+        lastActive = Date.now();
+      }
+    };
+    const onActivity = () => {
+      lastActive = Date.now();
+    };
+    // Idle in the foreground gets five times as long: the screen is in the
+    // user's hand and codes ticking over is the app working.
+    const idle = window.setInterval(() => {
+      if (document.visibilityState === "visible" && Date.now() - lastActive > limit * 5000) lock();
+    }, 5000);
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+    return () => {
+      window.clearInterval(idle);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+    };
+  }, [status, meta.autoLockSeconds, lock]);
+
+  return <VaultContext.Provider value={api}>{children}</VaultContext.Provider>;
+}

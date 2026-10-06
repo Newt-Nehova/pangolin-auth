@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* Tokens. Night-bush charcoal with bronze scales; a warm sand light mode. */
+:root {
+  --bg: #f4efe6;
+  --surface: #fffdf9;
+  --raised: #ebe4d8;
+  --line: #ddd4c5;
+  --ink: #1f1b16;
+  --muted: #6e665a;
+  --accent: #9a5a22;
+  --accent-ink: #ffffff;
+  --accent-soft: #f1e2d1;
+  --warn: #b4421f;
+  --ok: #2f7a4f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1110;
+    --surface: #161a18;
+    --raised: #1f2521;
+    --line: #2b322d;
+    --ink: #ece6da;
+    --muted: #9b9487;
+    --accent: #d4924f;
+    --accent-ink: #1a1209;
+    --accent-soft: #2c2219;
+    --warn: #f07a5e;
+    --ok: #6cc28f;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+/* Inside a layer on purpose: unlayered rules silently beat Tailwind utilities. */
+@layer base {
+  html {
+    color-scheme: light dark;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  a,
+  label,
+  summary,
+  select,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+  /* iOS zooms the page on focus for anything under 16px. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* The scale pattern behind the lock screen. */
+  .scales {
+    background-color: var(--bg);
+    background-image: radial-gradient(circle at 50% 0%, transparent 13px, var(--line) 14px, transparent 15px);
+    background-size: 28px 18px;
+  }
+  .scales-fade {
+    mask-image: linear-gradient(to bottom, black, transparent 70%);
+  }
+}
+
+@layer base {
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
