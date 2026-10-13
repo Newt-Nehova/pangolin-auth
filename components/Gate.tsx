@@ -6,7 +6,7 @@ import { BRAND } from "@/lib/brand";
 import { passcodeAdvice, WrongPasscodeError } from "@/lib/crypto";
 import { useVault } from "@/lib/vault";
 import { Mark } from "./Mark";
-import { Field, inputClass, primaryButton } from "./ui";
+import { dangerButton, Field, inputClass, primaryButton, secondaryButton } from "./ui";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -78,7 +78,8 @@ export function Setup() {
         <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl bg-accent-soft p-3 text-sm">
           <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent)]" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
           <span>
-            I understand there is <strong>no reset</strong>. Nobody — not even the app&apos;s maker — can open the vault without this passcode.
+            I understand there is <strong>no reset</strong>. Nobody — not even the app&apos;s maker — can open the vault without this
+            passcode, so I&apos;ve saved it somewhere safe (a password manager, or written down).
           </span>
         </label>
         {error && <p className="text-sm text-warn" role="alert">{error}</p>}
@@ -92,6 +93,7 @@ export function Setup() {
 
 export function Lock() {
   const vault = useVault();
+  const [forgot, setForgot] = useState(false);
   const [passcode, setPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +127,8 @@ export function Lock() {
     }
   }
 
+  if (forgot) return <StartOver onCancel={() => setForgot(false)} />;
+
   return (
     <Shell>
       <Brand />
@@ -148,6 +152,77 @@ export function Lock() {
         </button>
       </form>
       <p className="mt-8 text-center text-sm text-muted">Locked. Your codes are encrypted on this device.</p>
+      <button
+        type="button"
+        onClick={() => setForgot(true)}
+        className="mx-auto mt-2 min-h-11 px-3 text-sm font-medium text-accent underline-offset-4 hover:underline"
+      >
+        Forgot passcode?
+      </button>
+    </Shell>
+  );
+}
+
+/**
+ * The only way past a forgotten passcode: erase the vault and begin again.
+ * Nothing is recovered -- the passcode is the key, so there is nothing to
+ * recover with. Letting anyone holding the phone do this gives away no
+ * secrets (clearing the browser's site data would do the same), so the
+ * guard is a typed confirmation against accidents, not a security check.
+ */
+function StartOver({ onCancel }: { onCancel: () => void }) {
+  const vault = useVault();
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function erase() {
+    setBusy(true);
+    try {
+      await vault.erase();
+    } catch {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Shell>
+      <Brand />
+      <div className="space-y-4 rounded-2xl border border-line bg-surface p-5 shadow-sm">
+        <h2 className="text-lg font-semibold">Forgot your passcode?</h2>
+        <p className="text-sm">
+          It can&apos;t be reset or recovered. The passcode is the only key to this vault, so the only way forward is to{" "}
+          <strong>erase it and start a new one</strong>.
+        </p>
+        <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted">
+          <li>Every account in this vault is deleted from this device, permanently.</li>
+          <li>
+            Have a backup file? After starting over, use <span className="text-ink">Settings → Restore</span> with the backup&apos;s own
+            password.
+          </li>
+          <li>No backup? Sign in to each site with the recovery codes it gave you, then set up two-factor again.</li>
+        </ul>
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium">
+            Type <strong>ERASE</strong> to confirm
+          </span>
+          <input
+            className={inputClass}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoCapitalize="characters"
+            autoComplete="off"
+            autoFocus
+          />
+        </label>
+        <div className="flex gap-2">
+          <button type="button" onClick={onCancel} className={`${secondaryButton} flex-1`} disabled={busy}>
+            Back
+          </button>
+          <button type="button" onClick={erase} className={`${dangerButton} flex-1`} disabled={busy || typed.trim() !== "ERASE"}>
+            {busy ? "Erasing…" : "Erase and start over"}
+          </button>
+        </div>
+      </div>
     </Shell>
   );
 }
