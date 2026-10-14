@@ -89,6 +89,16 @@
   .scales-fade {
     mask-image: linear-gradient(to bottom, black, transparent 70%);
   }
+  /* A new code eases into place. Movement only, never opacity: a paused or
+     throttled animation must not be able to leave a code invisible. */
+  .code-in {
+    animation: code-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes code-in {
+    from {
+      transform: translateY(0.3em) scale(0.97);
+    }
+  }
 }
 
 @layer base {

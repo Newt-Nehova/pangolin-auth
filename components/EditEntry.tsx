@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { displayName } from "@/lib/entries";
+import { displayName, groupsOf } from "@/lib/entries";
 import { buildOtpauth } from "@/lib/otpauth";
 import { useVault } from "@/lib/vault";
 import { IdentityCheck } from "./IdentityCheck";
@@ -15,6 +15,7 @@ export function EditEntry({ id, back }: { id: string; back: () => void }) {
   const entry = vault.entries[index];
   const [issuer, setIssuer] = useState(entry?.issuer ?? "");
   const [account, setAccount] = useState(entry?.account ?? "");
+  const [group, setGroup] = useState(entry?.group ?? "");
 
   if (!entry) {
     return (
@@ -25,7 +26,10 @@ export function EditEntry({ id, back }: { id: string; back: () => void }) {
   }
 
   async function save() {
-    await vault.update(id, { issuer: issuer.trim(), account: account.trim() });
+    // Reuse an existing group's spelling, so "work" joins "Work" instead of starting a twin.
+    const typed = group.trim().slice(0, 40);
+    const existing = groupsOf(vault.entries).find((g) => g.toLowerCase() === typed.toLowerCase());
+    await vault.update(id, { issuer: issuer.trim(), account: account.trim(), group: existing ?? typed });
     toast("Saved");
     back();
   }
@@ -39,21 +43,36 @@ export function EditEntry({ id, back }: { id: string; back: () => void }) {
         <Field label="Account">
           <input className={inputClass} value={account} onChange={(e) => setAccount(e.target.value)} autoCapitalize="off" />
         </Field>
+        <Field label="Group" hint="Optional, e.g. Work or Banking. Groups appear as filters on the main screen.">
+          <input className={inputClass} value={group} onChange={(e) => setGroup(e.target.value)} list="pangolin-groups" maxLength={40} />
+          <datalist id="pangolin-groups">
+            {groupsOf(vault.entries).map((g) => (
+              <option key={g} value={g} />
+            ))}
+          </datalist>
+        </Field>
         <button onClick={save} className={`${primaryButton} w-full`} disabled={!issuer.trim() && !account.trim()}>
           Save
         </button>
 
-        <div className="pt-2">
-          <p className="mb-2 text-sm font-medium">Position in list</p>
-          <div className="flex gap-2">
-            <button onClick={() => vault.move(id, -1)} disabled={index === 0} className={`${secondaryButton} flex-1`}>
-              <Icon name="up" size={18} /> Move up
-            </button>
-            <button onClick={() => vault.move(id, 1)} disabled={index === vault.entries.length - 1} className={`${secondaryButton} flex-1`}>
-              <Icon name="down" size={18} /> Move down
-            </button>
-          </div>
-        </div>
+        <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl border border-line bg-surface px-4 shadow-sm">
+          <Icon name="star" size={20} className={entry.pinned ? "fill-accent text-accent" : "text-muted"} />
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium">Pin to top</span>
+            <span className="block text-sm text-muted">Keep this account above the rest.</span>
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+            checked={!!entry.pinned}
+            onChange={(e) => {
+              vault.update(id, { pinned: e.target.checked });
+              toast(e.target.checked ? "Pinned to top" : "Unpinned");
+            }}
+          />
+        </label>
+        <p className="text-sm text-muted">To change the order, use Reorder under the list on the main screen.</p>
 
         <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 rounded-2xl border border-line bg-surface p-4 text-sm">
           <dt className="text-muted">Type</dt>

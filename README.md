@@ -21,6 +21,9 @@ Live: https://pangolin-auth.vercel.app
 - Clock check against the site's own Date header (no third party); warns when codes would fail
 - Copied codes clear after 30 s while the app is open; haptic tap on copy (Android)
 - Home-screen shortcuts: Add account, Search
+- Service logos (Simple Icons, bundled, tree-shaken to the ~60 used), coloured initials otherwise
+- Pin accounts to the top; free-text groups shown as filter chips
+- Drag to reorder (grip handle, also arrow keys), compact one-line view, new codes ease in
 - Installable PWA, works fully offline
 
 ## Security design

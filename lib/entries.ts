@@ -14,7 +14,10 @@ export function toDraft(value: unknown): EntryDraft | null {
   const counter = Number(v.counter ?? 0);
   if (!Number.isInteger(period) || period < 1 || period > 300) return null;
   if (!Number.isSafeInteger(counter) || counter < 0) return null;
+  const group = typeof v.group === "string" ? v.group.trim().slice(0, 40) : "";
   return {
+    ...(v.pinned === true ? { pinned: true } : {}),
+    ...(group ? { group } : {}),
     type: v.type,
     issuer: String(v.issuer ?? "").slice(0, 200),
     account: String(v.account ?? "").slice(0, 200),
@@ -74,8 +77,27 @@ export function badgeHue(seed: string): number {
   return hash % 360;
 }
 
+/** Pinned first; otherwise the user's own order. Stable. */
+export function displayOrder(entries: Entry[]): Entry[] {
+  return [...entries.filter((e) => e.pinned), ...entries.filter((e) => !e.pinned)];
+}
+
+/** Every group in use, A–Z, case-insensitively de-duplicated. */
+export function groupsOf(entries: Entry[]): string[] {
+  const seen = new Map<string, string>();
+  for (const e of entries) {
+    const g = e.group?.trim();
+    if (g && !seen.has(g.toLowerCase())) seen.set(g.toLowerCase(), g);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
 export function matchesQuery(entry: Entry, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return entry.issuer.toLowerCase().includes(q) || entry.account.toLowerCase().includes(q);
+  return (
+    entry.issuer.toLowerCase().includes(q) ||
+    entry.account.toLowerCase().includes(q) ||
+    (entry.group ?? "").toLowerCase().includes(q)
+  );
 }

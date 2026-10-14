@@ -15,6 +15,10 @@ export interface Entry {
   period: number;
   /** HOTP moving counter: the value the NEXT generated code uses. */
   counter: number;
+  /** Shown above everything else. */
+  pinned?: boolean;
+  /** Free-text folder, e.g. "Work", "Banking". Empty/absent = no group. */
+  group?: string;
   createdAt: string;
   updatedAt: string;
 }

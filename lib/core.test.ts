@@ -12,7 +12,7 @@ import {
   WrongPasscodeError,
 } from "./crypto";
 import { newEntry, splitDuplicates } from "./entries";
-import type { Algorithm, EntryDraft } from "./types";
+import type { Algorithm, Entry, EntryDraft } from "./types";
 
 const ascii = (s: string) => new TextEncoder().encode(s);
 
@@ -391,5 +391,45 @@ describe("clock check", async () => {
     expect(skewSeconds(40_000, 100_000)).toBe(-60);
     expect(describeSkew(45)).toBe("This phone's clock is 45 seconds fast");
     expect(describeSkew(-300)).toBe("This phone's clock is 5 minutes slow");
+  });
+});
+
+describe("logos", async () => {
+  const { logoFor, inkOn } = await import("./logos");
+  it("matches common spellings, and only falls back to the email domain when there's no service name", () => {
+    expect(logoFor("GitHub")?.title).toBe("GitHub");
+    expect(logoFor("github.com")?.title).toBe("GitHub");
+    expect(logoFor("Google Workspace")?.title).toBe("Google");
+    expect(logoFor("Twitter")?.title).toBe("X");
+    expect(logoFor("", "duro@gmail.com")?.title).toBe("Google");
+    expect(logoFor("Standard Bank", "duro@gmail.com")).toBeNull();
+    expect(logoFor("Microsoft")).toBeNull(); // not in Simple Icons: letter badge
+  });
+  it("picks readable ink for the brand colour", () => {
+    expect(inkOn("181717")).toBe("#ffffff"); // GitHub near-black
+    expect(inkOn("FFFC00")).toBe("#000000"); // Snapchat yellow
+  });
+});
+
+describe("pins and groups", async () => {
+  const { displayOrder, groupsOf, matchesQuery, toDraft } = await import("./entries");
+  const mk = (issuer: string, extra: Partial<Entry> = {}): Entry => ({
+    ...newEntry({ type: "totp", issuer, account: "a", secret: "JBSWY3DPEHPK3PXP", algorithm: "SHA1", digits: 6, period: 30, counter: 0 }),
+    ...extra,
+  });
+  it("puts pinned first and otherwise keeps the user's order", () => {
+    const list = [mk("A"), mk("B", { pinned: true }), mk("C"), mk("D", { pinned: true })];
+    expect(displayOrder(list).map((e) => e.issuer)).toEqual(["B", "D", "A", "C"]);
+  });
+  it("lists groups once each, A–Z, ignoring case and blanks", () => {
+    expect(groupsOf([mk("A", { group: "Work" }), mk("B", { group: "work" }), mk("C", { group: "Banking" }), mk("D", { group: "  " })])).toEqual(["Banking", "Work"]);
+  });
+  it("finds accounts by group name too", () => {
+    expect(matchesQuery(mk("GitHub", { group: "Work" }), "work")).toBe(true);
+  });
+  it("carries pin and group through backups, and drops junk values", () => {
+    expect(toDraft(mk("A", { pinned: true, group: "Work" }))).toMatchObject({ pinned: true, group: "Work" });
+    const junk = toDraft({ ...mk("A"), pinned: "yes", group: 42 }) as Record<string, unknown>;
+    expect("pinned" in junk || "group" in junk).toBe(false);
   });
 });

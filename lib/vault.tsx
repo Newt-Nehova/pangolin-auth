@@ -54,7 +54,9 @@ interface VaultApi {
   disableBiometric(): Promise<void>;
   lock(): void;
   add(drafts: EntryDraft[]): Promise<number>;
-  update(id: string, patch: Partial<Pick<Entry, "issuer" | "account" | "counter">>): Promise<void>;
+  update(id: string, patch: Partial<Pick<Entry, "issuer" | "account" | "counter" | "pinned" | "group">>): Promise<void>;
+  /** Saves a new order (drag to reorder). Ids not listed keep their place at the end. */
+  reorder(ids: string[]): Promise<void>;
   remove(ids: string[]): Promise<void>;
   move(id: string, delta: -1 | 1): Promise<void>;
   /** Replaces every account -- only used by restore-from-backup in "replace" mode. */
@@ -257,6 +259,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     },
 
     replaceAll: (list) => persist(list),
+
+    reorder: (ids) => {
+      const byId = new Map(entriesRef.current.map((e) => [e.id, e]));
+      const ordered = ids.map((id) => byId.get(id)).filter((e): e is Entry => !!e);
+      const rest = entriesRef.current.filter((e) => !ids.includes(e.id));
+      return persist([...ordered, ...rest]);
+    },
 
     changePasscode: (current, next) =>
       commit(async () => {

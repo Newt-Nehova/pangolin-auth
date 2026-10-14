@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BRAND } from "@/lib/brand";
-import { matchesQuery } from "@/lib/entries";
+import { displayOrder, groupsOf, matchesQuery } from "@/lib/entries";
 import { clockSkew, describeSkew, SKEW_WARN_SECONDS } from "@/lib/clock";
 import { warmQrReader } from "@/lib/qr";
 import { useVault } from "@/lib/vault";
 import { CodeCard } from "./CodeCard";
+import { ReorderList } from "./ReorderList";
 import { Mark } from "./Mark";
 import { dangerButton, Icon, iconButton, inputClass, primaryButton, secondaryButton, useToast } from "./ui";
 
@@ -42,6 +43,9 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
+  const [group, setGroup] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+  const pendingOrder = useRef<string[] | null>(null);
 
   useEffect(warmQrReader, []);
 
@@ -55,8 +59,17 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
     };
   }, []);
 
-  const list = useMemo(() => vault.entries.filter((e) => matchesQuery(e, query)), [vault.entries, query]);
   const { meta, entries } = vault;
+  const groups = useMemo(() => groupsOf(entries), [entries]);
+  // A group that no longer exists (renamed, or its last account removed) quietly stops filtering.
+  const activeGroup = group && groups.some((g) => g.toLowerCase() === group.toLowerCase()) ? group : null;
+  const list = useMemo(
+    () =>
+      displayOrder(entries).filter(
+        (e) => matchesQuery(e, query) && (!activeGroup || (e.group ?? "").toLowerCase() === activeGroup.toLowerCase())
+      ),
+    [entries, query, activeGroup]
+  );
   const unbacked =
     entries.length > 0 && (!meta.lastBackupAt || (meta.lastChangeAt !== null && meta.lastChangeAt > meta.lastBackupAt));
 
@@ -75,6 +88,12 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
     setConfirming(false);
   }
 
+  async function finishReorder() {
+    if (pendingOrder.current) await vault.reorder(pendingOrder.current);
+    pendingOrder.current = null;
+    setReordering(false);
+  }
+
   async function removeSelected() {
     const count = selected.size;
     await vault.remove([...selected]);
@@ -85,7 +104,14 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col">
       <header className="sticky top-0 z-20 border-b border-line bg-bg/90 px-3 py-2 backdrop-blur">
-        {selecting ? (
+        {reordering ? (
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 pl-2 font-semibold">Drag to reorder</span>
+            <button onClick={finishReorder} className={`${primaryButton} h-11`}>
+              Done
+            </button>
+          </div>
+        ) : selecting ? (
           <div className="flex items-center gap-2">
             <button onClick={exitSelect} className={iconButton} aria-label="Cancel selection">
               <Icon name="x" />
@@ -145,7 +171,7 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
           </button>
         )}
 
-        {(entries.length > 4 || focusSearch) && entries.length > 0 && (
+        {!reordering && (entries.length > 4 || focusSearch) && entries.length > 0 && (
           <div className="relative mb-4">
             <Icon name="search" size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
             <input
@@ -160,7 +186,30 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
           </div>
         )}
 
-        {entries.length === 0 ? (
+        {!reordering && groups.length > 0 && (
+          <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1" role="tablist" aria-label="Groups">
+            {[null, ...groups].map((g) => {
+              const on = (g === null && !activeGroup) || (g !== null && activeGroup?.toLowerCase() === g.toLowerCase());
+              return (
+                <button
+                  key={g ?? "__all"}
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setGroup(g)}
+                  className={`h-11 shrink-0 rounded-full border px-4 text-sm font-medium transition ${
+                    on ? "border-accent bg-accent text-accent-ink" : "border-line bg-surface text-ink"
+                  }`}
+                >
+                  {g ?? "All"}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {reordering ? (
+          <ReorderList entries={displayOrder(entries)} onChange={(ids) => (pendingOrder.current = ids)} />
+        ) : entries.length === 0 ? (
           <div className="mt-16 text-center">
             <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft text-accent">
               <Mark size={36} />
@@ -174,9 +223,9 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
             </button>
           </div>
         ) : list.length === 0 ? (
-          <p className="mt-10 text-center text-muted">Nothing matches “{query}”.</p>
+          <p className="mt-10 text-center text-muted">{query ? <>Nothing matches “{query}”.</> : "No accounts in this group."}</p>
         ) : (
-          <ul className="space-y-3">
+          <ul className={meta.compact ? "space-y-2" : "space-y-3"}>
             {list.map((entry) => (
               <CodeCard
                 key={entry.id}
@@ -186,11 +235,32 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
                 selecting={selecting}
                 selected={selected.has(entry.id)}
                 onToggle={() => toggle(entry.id)}
+                compact={meta.compact}
               />
             ))}
           </ul>
         )}
-        {entries.length > 0 && !selecting && <p className="mt-6 text-center text-sm text-muted">Tap a code to copy it.</p>}
+        {entries.length > 0 && !selecting && !reordering && (
+          <div className="mt-6 text-center text-sm text-muted">
+            <p>Tap a code to copy it.</p>
+            <div className="mt-2 flex justify-center gap-2">
+              <button
+                onClick={() => vault.setMeta({ compact: !meta.compact })}
+                className="inline-flex h-11 items-center gap-1.5 rounded-xl px-3 font-medium text-accent hover:bg-raised"
+              >
+                <Icon name="rows" size={16} /> {meta.compact ? "Roomy view" : "Compact view"}
+              </button>
+              {entries.length > 1 && (
+                <button
+                  onClick={() => setReordering(true)}
+                  className="inline-flex h-11 items-center gap-1.5 rounded-xl px-3 font-medium text-accent hover:bg-raised"
+                >
+                  <Icon name="grip" size={16} /> Reorder
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {selecting ? (
@@ -219,7 +289,8 @@ export function Home({ go, focusSearch = false }: { go: (route: string) => void;
           </div>
         </div>
       ) : (
-        entries.length > 0 && (
+        entries.length > 0 &&
+        !reordering && (
           <button
             onClick={() => go("add")}
             className="fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] right-5 z-30 inline-flex h-14 items-center gap-2 rounded-2xl bg-accent px-5 font-semibold text-accent-ink shadow-lg active:scale-95"
