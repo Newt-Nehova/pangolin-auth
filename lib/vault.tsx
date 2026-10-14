@@ -10,11 +10,17 @@
  * of order and leave the older list on disk.
  */
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { enrollBiometric, evaluatePrf, forgetPasskey } from "./biometric";
 import {
+  addPrfWrap,
   changePasscode as rewrap,
   createVault,
+  fromB64,
+  prfWrapOf,
+  removePrfWrap,
   sealEntries,
   unlockVault,
+  unlockVaultWithPrf,
   type VaultBlob,
 } from "./crypto";
 import { DEFAULT_META, loadMeta, loadVault, requestPersistence, saveMeta, saveVault, wipe, type Meta } from "./db";
@@ -28,8 +34,13 @@ interface VaultApi {
   entries: Entry[];
   meta: Meta;
   persisted: boolean | null;
+  /** When fingerprint/face unlock was turned on, or null. Readable while locked. */
+  biometricSince: string | null;
   create(passcode: string): Promise<void>;
   unlock(passcode: string): Promise<void>;
+  unlockWithBiometric(): Promise<void>;
+  enableBiometric(passcode: string): Promise<void>;
+  disableBiometric(): Promise<void>;
   lock(): void;
   add(drafts: EntryDraft[]): Promise<number>;
   update(id: string, patch: Partial<Pick<Entry, "issuer" | "account" | "counter">>): Promise<void>;
@@ -55,6 +66,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [meta, setMetaState] = useState<Meta>(DEFAULT_META);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [biometricSince, setBiometricSince] = useState<string | null>(null);
 
   // Refs hold the authoritative copies so chained saves never see stale state.
   const blobRef = useRef<VaultBlob | null>(null);
@@ -62,6 +74,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const entriesRef = useRef<Entry[]>([]);
   const metaRef = useRef<Meta>(DEFAULT_META);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
+
+  /** Every write of the blob goes through here so the biometric flag can't drift. */
+  const setBlob = useCallback((blob: VaultBlob | null) => {
+    blobRef.current = blob;
+    setBiometricSince(blob ? (prfWrapOf(blob)?.createdAt ?? null) : null);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -73,11 +91,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       const [blob, m] = await Promise.all([loadVault(), loadMeta()]);
       metaRef.current = m;
       setMetaState(m);
-      blobRef.current = blob ?? null;
+      setBlob(blob ?? null);
       setStatus(blob ? "locked" : "new");
       setPersisted(await requestPersistence().catch(() => null));
     })().catch(() => setStatus("unsupported"));
-  }, []);
+  }, [setBlob]);
 
   const lock = useCallback(() => {
     keyRef.current = null;
@@ -108,12 +126,12 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (!key || !blob) throw new Error("The vault is locked.");
         const sealed = await sealEntries(blob, key, next);
         await saveVault(sealed);
-        blobRef.current = sealed;
+        setBlob(sealed);
         entriesRef.current = next;
         setEntries(next);
         await writeMeta({ lastChangeAt: new Date().toISOString() });
       }),
-    [commit, writeMeta]
+    [commit, writeMeta, setBlob]
   );
 
   const api: VaultApi = {
@@ -121,12 +139,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     entries,
     meta,
     persisted,
+    biometricSince,
 
     create: (passcode) =>
       commit(async () => {
         const { blob, key } = await createVault(passcode);
         await saveVault(blob);
-        blobRef.current = blob;
+        setBlob(blob);
         keyRef.current = key;
         entriesRef.current = [];
         setEntries([]);
@@ -144,6 +163,45 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setEntries(list);
       setStatus("open");
     },
+
+    unlockWithBiometric: async () => {
+      const blob = blobRef.current;
+      const wrap = blob && prfWrapOf(blob);
+      if (!blob || !wrap) throw new Error("Biometric unlock is not set up.");
+      const secret = await evaluatePrf(wrap.credentialId, fromB64(wrap.prfSalt));
+      const { key, entries: list } = await unlockVaultWithPrf(blob, secret);
+      keyRef.current = key;
+      entriesRef.current = list;
+      setEntries(list);
+      setStatus("open");
+    },
+
+    // The passcode is checked FIRST (inside addPrfWrap's unwrap would be too
+    // late: the passkey would already exist). A wrong passcode must not leave
+    // an orphan passkey behind.
+    enableBiometric: (passcode) =>
+      commit(async () => {
+        const blob = blobRef.current;
+        if (!blob) throw new Error("No vault yet.");
+        await unlockVault(blob, passcode);
+        const old = prfWrapOf(blob);
+        const { credentialId, prfSalt, prfOutput } = await enrollBiometric();
+        const next = await addPrfWrap(blob, passcode, credentialId, prfSalt, prfOutput);
+        await saveVault(next);
+        setBlob(next);
+        if (old) forgetPasskey(old.credentialId);
+      }),
+
+    disableBiometric: () =>
+      commit(async () => {
+        const blob = blobRef.current;
+        const old = blob && prfWrapOf(blob);
+        if (!blob || !old) return;
+        const next = removePrfWrap(blob);
+        await saveVault(next);
+        setBlob(next);
+        forgetPasskey(old.credentialId);
+      }),
 
     lock,
 
@@ -177,15 +235,17 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         if (!blob) throw new Error("No vault yet.");
         const rewrapped = await rewrap(blob, current, next);
         await saveVault(rewrapped);
-        blobRef.current = rewrapped;
+        setBlob(rewrapped);
       }),
 
     setMeta: (patch) => commit(() => writeMeta(patch)),
 
     erase: () =>
       commit(async () => {
+        const old = blobRef.current && prfWrapOf(blobRef.current);
         await wipe();
-        blobRef.current = null;
+        if (old) forgetPasskey(old.credentialId);
+        setBlob(null);
         keyRef.current = null;
         entriesRef.current = [];
         metaRef.current = DEFAULT_META;

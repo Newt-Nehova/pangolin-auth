@@ -64,6 +64,7 @@ const PATHS: Record<string, string> = {
   refresh: "M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0114.8-3.4L23 10M1 14l4.6 4.4A9 9 0 0020.5 15",
   x: "M18 6L6 18M6 6l12 12",
   alert: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z",
+  fingerprint: "M12 11c0 3.5-1 6.5-3 9M8 7.5A5 5 0 0117 10c0 2-.2 4-.8 6M5 10a7 7 0 0113.9-1.2M12 15.5c-.4 1.9-1.1 3.7-2.1 5.3M15.5 18.5c-.3.9-.6 1.7-1 2.5M4.5 14.5c.3-1 .5-2.2.5-4.5",
 };
 
 export function Icon({ name, size = 22, className = "" }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {

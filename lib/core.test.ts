@@ -214,3 +214,48 @@ describe("restoring untrusted data", async () => {
     expect(toDraft("otpauth://x")).toBeNull();
   });
 });
+
+describe("biometric (PRF) wrap", async () => {
+  const { addPrfWrap, removePrfWrap, prfWrapOf, unlockVaultWithPrf, BiometricMismatchError } = await import("./crypto");
+  const entry = newEntry({ type: "totp", issuer: "GitHub", account: "duro", secret: "JBSWY3DPEHPK3PXP", algorithm: "SHA1", digits: 6, period: 30, counter: 0 });
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+
+  it("opens with the device secret, alongside the passcode", async () => {
+    const { blob, key } = await createVault("my passcode");
+    const sealed = await sealEntries(blob, key, [entry]);
+    const withPrf = await addPrfWrap(sealed, "my passcode", "Y3JlZA==", salt, secret);
+    expect(withPrf.ct).toBe(sealed.ct); // data untouched
+    expect(prfWrapOf(withPrf)?.credentialId).toBe("Y3JlZA==");
+    const opened = await unlockVaultWithPrf(withPrf, secret);
+    expect(opened.entries).toEqual([entry]);
+    expect(opened.key.extractable).toBe(false);
+    expect((await unlockVault(withPrf, "my passcode")).entries).toEqual([entry]);
+  });
+
+  it("refuses a different device secret and a wrong passcode at setup", async () => {
+    const { blob } = await createVault("my passcode");
+    const withPrf = await addPrfWrap(blob, "my passcode", "Y3JlZA==", salt, secret);
+    await expect(unlockVaultWithPrf(withPrf, crypto.getRandomValues(new Uint8Array(32)))).rejects.toBeInstanceOf(BiometricMismatchError);
+    await expect(addPrfWrap(blob, "not it", "Y3JlZA==", salt, secret)).rejects.toBeInstanceOf(WrongPasscodeError);
+  });
+
+  it("survives a passcode change and can be removed", async () => {
+    const { blob } = await createVault("old passcode");
+    const withPrf = await addPrfWrap(blob, "old passcode", "Y3JlZA==", salt, secret);
+    const changed = await changePasscode(withPrf, "old passcode", "new passcode");
+    await expect(unlockVaultWithPrf(changed, secret)).resolves.toBeTruthy();
+    const off = removePrfWrap(changed);
+    expect(prfWrapOf(off)).toBeNull();
+    await expect(unlockVaultWithPrf(off, secret)).rejects.toThrow();
+    await expect(unlockVault(off, "new passcode")).resolves.toBeTruthy();
+  });
+
+  it("re-enrolling replaces the old wrap rather than stacking", async () => {
+    const { blob } = await createVault("my passcode");
+    const once = await addPrfWrap(blob, "my passcode", "QQ==", salt, secret);
+    const twice = await addPrfWrap(once, "my passcode", "Qg==", salt, secret);
+    expect(twice.wraps.filter((w) => w.kind === "prf")).toHaveLength(1);
+    expect(prfWrapOf(twice)?.credentialId).toBe("Qg==");
+  });
+}, 60_000);

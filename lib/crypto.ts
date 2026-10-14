@@ -28,10 +28,28 @@ export interface PasscodeWrap {
   wrapped: string;
 }
 
+/**
+ * The data key wrapped by a secret only this device's authenticator can
+ * produce, and only after a fingerprint/face/screen-lock check (WebAuthn PRF).
+ * Copying the stored blob is useless without the phone's secure hardware.
+ */
+export interface PrfWrap {
+  kind: "prf";
+  /** base64 credential id, to ask the authenticator for the right passkey. */
+  credentialId: string;
+  /** The PRF input. Random per wrap; not secret. */
+  prfSalt: string;
+  iv: string;
+  wrapped: string;
+  createdAt: string;
+}
+
+export type Wrap = PasscodeWrap | PrfWrap;
+
 export interface VaultBlob {
   format: "pangolin-vault";
   v: 1;
-  wraps: PasscodeWrap[];
+  wraps: Wrap[];
   iv: string;
   ct: string;
 }
@@ -149,8 +167,7 @@ export async function createVault(passcode: string): Promise<{ blob: VaultBlob; 
 }
 
 export async function unlockVault(blob: VaultBlob, passcode: string): Promise<{ key: CryptoKey; entries: Entry[] }> {
-  const wrap = blob.wraps.find((w) => w.kind === "passcode");
-  if (!wrap) throw new Error("This vault has no passcode wrap.");
+  const wrap = passcodeWrap(blob);
   const key = await unwrapWithPasscode(wrap, passcode, false);
   const entries = await decryptJson<Entry[]>(key, blob.iv, blob.ct);
   return { key, entries };
@@ -163,11 +180,89 @@ export async function sealEntries(blob: VaultBlob, key: CryptoKey, entries: Entr
 
 /** Swaps the passcode wrap. Needs the current passcode: the open key is deliberately not extractable. */
 export async function changePasscode(blob: VaultBlob, current: string, next: string): Promise<VaultBlob> {
-  const wrap = blob.wraps.find((w) => w.kind === "passcode");
-  if (!wrap) throw new Error("This vault has no passcode wrap.");
-  const extractable = await unwrapWithPasscode(wrap, current, true);
+  const extractable = await unwrapWithPasscode(passcodeWrap(blob), current, true);
   const fresh = await wrapWithPasscode(extractable, next);
   return { ...blob, wraps: [...blob.wraps.filter((w) => w.kind !== "passcode"), fresh] };
+}
+
+function passcodeWrap(blob: VaultBlob): PasscodeWrap {
+  const wrap = blob.wraps.find((w): w is PasscodeWrap => w.kind === "passcode");
+  if (!wrap) throw new Error("This vault has no passcode wrap.");
+  return wrap;
+}
+
+// -- biometric (WebAuthn PRF) -------------------------------------------------
+
+/** Turns the authenticator's 32-byte PRF output into a wrapping key. */
+async function prfKek(prfOutput: BufferSource): Promise<CryptoKey> {
+  const material = await crypto.subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32) as BufferSource, info: new TextEncoder().encode("pangolin vault prf v1") as BufferSource },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["wrapKey", "unwrapKey"]
+  );
+}
+
+export function prfWrapOf(blob: VaultBlob): PrfWrap | null {
+  return blob.wraps.find((w): w is PrfWrap => w.kind === "prf") ?? null;
+}
+
+/**
+ * Adds (or replaces) the biometric wrap. Needs the passcode, because the open
+ * data key is deliberately non-extractable and cannot be re-wrapped by itself.
+ */
+export async function addPrfWrap(
+  blob: VaultBlob,
+  passcode: string,
+  credentialId: string,
+  prfSalt: Uint8Array,
+  prfOutput: BufferSource
+): Promise<VaultBlob> {
+  const extractable = await unwrapWithPasscode(passcodeWrap(blob), passcode, true);
+  const iv = random(12);
+  const wrapped = await crypto.subtle.wrapKey("raw", extractable, await prfKek(prfOutput), { name: "AES-GCM", iv: iv as BufferSource });
+  const wrap: PrfWrap = {
+    kind: "prf",
+    credentialId,
+    prfSalt: toB64(prfSalt),
+    iv: toB64(iv),
+    wrapped: toB64(wrapped),
+    createdAt: new Date().toISOString(),
+  };
+  return { ...blob, wraps: [...blob.wraps.filter((w) => w.kind !== "prf"), wrap] };
+}
+
+export function removePrfWrap(blob: VaultBlob): VaultBlob {
+  return { ...blob, wraps: blob.wraps.filter((w) => w.kind !== "prf") };
+}
+
+export class BiometricMismatchError extends Error {
+  constructor() {
+    super("That fingerprint or passkey doesn't open this vault.");
+  }
+}
+
+export async function unlockVaultWithPrf(blob: VaultBlob, prfOutput: BufferSource): Promise<{ key: CryptoKey; entries: Entry[] }> {
+  const wrap = prfWrapOf(blob);
+  if (!wrap) throw new Error("Biometric unlock is not set up.");
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.unwrapKey(
+      "raw",
+      fromB64(wrap.wrapped) as BufferSource,
+      await prfKek(prfOutput),
+      { name: "AES-GCM", iv: fromB64(wrap.iv) as BufferSource },
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  } catch {
+    throw new BiometricMismatchError();
+  }
+  const entries = await decryptJson<Entry[]>(key, blob.iv, blob.ct);
+  return { key, entries };
 }
 
 export function isVaultBlob(value: unknown): value is VaultBlob {

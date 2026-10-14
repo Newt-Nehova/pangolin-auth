@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { BiometricCancelledError, BiometricUnsupportedError, platformAuthenticatorAvailable } from "@/lib/biometric";
 import { BRAND } from "@/lib/brand";
 import { createBackup, isBackupFile, openBackup, passcodeAdvice, WrongPasscodeError, type BackupFile } from "@/lib/crypto";
 import { splitDuplicates, toDraft } from "@/lib/entries";
@@ -42,6 +43,7 @@ export function Settings({ back }: { back: () => void }) {
             </select>
           </Field>
         </Section>
+        <BiometricSection />
         <PasscodeSection />
         <Section title="This device">
           <ul className="space-y-2 text-sm">
@@ -272,6 +274,99 @@ function RestoreSection() {
         </div>
       )}
       {error && <p className="mt-3 text-sm text-warn" role="alert">{error}</p>}
+    </Section>
+  );
+}
+
+// -- biometric ----------------------------------------------------------------
+
+function BiometricSection() {
+  const vault = useVault();
+  const toast = useToast();
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [open, setOpen] = useState(false);
+  const [passcode, setPasscode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    platformAuthenticatorAvailable().then((ok) => live && setAvailable(ok));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  async function enable(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await vault.enableBiometric(passcode);
+      toast("Fingerprint unlock is on");
+      setOpen(false);
+      setPasscode("");
+    } catch (err) {
+      if (err instanceof BiometricCancelledError) setError(null);
+      else if (err instanceof WrongPasscodeError) setError("That passcode isn't right.");
+      else if (err instanceof BiometricUnsupportedError) setError(err.message);
+      else setError("Couldn't set it up on this device.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable() {
+    await vault.disableBiometric();
+    toast("Fingerprint unlock is off");
+  }
+
+  return (
+    <Section title="Fingerprint or face unlock">
+      {vault.biometricSince ? (
+        <>
+          <p className="mb-3 flex items-start gap-2 text-sm">
+            <Icon name="check" size={18} className="mt-0.5 shrink-0 text-ok" />
+            <span>
+              On since {when(vault.biometricSince)}. Your passcode still works, and is still the only way in if this phone&apos;s
+              fingerprints or face are reset.
+            </span>
+          </p>
+          <button onClick={disable} className={`${secondaryButton} w-full`}>
+            Turn off
+          </button>
+        </>
+      ) : available === false ? (
+        <p className="text-sm text-muted">
+          This browser or device has no fingerprint, face or screen-lock unlock available. On a phone, set up a screen lock and open
+          the app in Chrome (Android) or Safari (iPhone).
+        </p>
+      ) : !open ? (
+        <>
+          <p className="mb-3 text-sm text-muted">
+            Unlock with your phone&apos;s fingerprint, face or screen lock instead of typing the passcode. The vault key is protected
+            by this phone&apos;s secure hardware, not just hidden behind a prompt.
+          </p>
+          <button onClick={() => setOpen(true)} disabled={available === null} className={`${primaryButton} w-full`}>
+            <Icon name="fingerprint" size={20} /> Turn on
+          </button>
+        </>
+      ) : (
+        <form onSubmit={enable} className="space-y-3">
+          <Field label="Your passcode" hint="Needed once, so someone holding your unlocked phone can't add their own fingerprint.">
+            <input type="password" autoComplete="current-password" className={inputClass} value={passcode} onChange={(e) => setPasscode(e.target.value)} autoFocus />
+          </Field>
+          {error && <p className="text-sm text-warn" role="alert">{error}</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => (setOpen(false), setError(null))} className={`${secondaryButton} flex-1`}>
+              Cancel
+            </button>
+            <button className={`${primaryButton} flex-1`} disabled={busy || !passcode}>
+              {busy ? "Waiting for phone…" : "Continue"}
+            </button>
+          </div>
+        </form>
+      )}
     </Section>
   );
 }

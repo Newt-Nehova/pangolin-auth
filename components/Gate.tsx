@@ -3,10 +3,11 @@
 /** First run (create a passcode) and the lock screen. */
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { BRAND } from "@/lib/brand";
-import { passcodeAdvice, WrongPasscodeError } from "@/lib/crypto";
+import { BiometricCancelledError, BiometricUnsupportedError } from "@/lib/biometric";
+import { BiometricMismatchError, passcodeAdvice, WrongPasscodeError } from "@/lib/crypto";
 import { useVault } from "@/lib/vault";
 import { Mark } from "./Mark";
-import { dangerButton, Field, inputClass, primaryButton, secondaryButton } from "./ui";
+import { dangerButton, Field, Icon, inputClass, primaryButton, secondaryButton } from "./ui";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -127,11 +128,40 @@ export function Lock() {
     }
   }
 
+  async function biometric() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await vault.unlockWithBiometric();
+    } catch (err) {
+      // Backing out of the system prompt is a choice, not an error.
+      if (!(err instanceof BiometricCancelledError)) {
+        setError(
+          err instanceof BiometricMismatchError
+            ? `${err.message} Use your passcode.`
+            : err instanceof BiometricUnsupportedError
+            ? "Fingerprint unlock isn't available here. Use your passcode."
+            : "Fingerprint unlock didn't work. Use your passcode."
+        );
+      }
+      setBusy(false);
+    }
+  }
+
   if (forgot) return <StartOver onCancel={() => setForgot(false)} />;
 
   return (
     <Shell>
       <Brand />
+      {vault.biometricSince && (
+        <>
+          <button type="button" onClick={biometric} disabled={busy} className={`${primaryButton} h-14 w-full text-lg`}>
+            <Icon name="fingerprint" /> Unlock with fingerprint or face
+          </button>
+          <p className="my-4 text-center text-sm text-muted">or use your passcode</p>
+        </>
+      )}
       <form onSubmit={submit} className="space-y-4">
         <label className="sr-only" htmlFor="passcode">Passcode</label>
         <input
@@ -143,11 +173,14 @@ export function Lock() {
           className={`${inputClass} h-14 text-center text-lg`}
           value={passcode}
           onChange={(e) => setPasscode(e.target.value)}
-          autoFocus
+          autoFocus={!vault.biometricSince}
           disabled={busy}
         />
         {error && <p className="text-center text-sm text-warn" role="alert">{error}</p>}
-        <button className={`${primaryButton} h-14 w-full text-lg`} disabled={busy || !passcode || waitLeft > 0}>
+        <button
+          className={`${vault.biometricSince ? secondaryButton : primaryButton} h-14 w-full text-lg`}
+          disabled={busy || !passcode || waitLeft > 0}
+        >
           {busy ? "Unlocking…" : waitLeft ? `Try again in ${waitLeft}s` : "Unlock"}
         </button>
       </form>
