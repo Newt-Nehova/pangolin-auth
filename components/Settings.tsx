@@ -5,6 +5,9 @@ import { BiometricCancelledError, BiometricUnsupportedError, platformAuthenticat
 import { BRAND } from "@/lib/brand";
 import { clockSkew, describeSkew, SKEW_WARN_SECONDS } from "@/lib/clock";
 import { saveOrShare } from "@/lib/files";
+import { parseImportFile } from "@/lib/importers";
+import { ParseError } from "@/lib/otpauth";
+import { setPendingImport } from "@/lib/pendingImport";
 import { createBackup, isBackupFile, openBackup, passcodeAdvice, WrongPasscodeError, type BackupFile } from "@/lib/crypto";
 import { splitDuplicates, toDraft } from "@/lib/entries";
 import type { EntryDraft } from "@/lib/types";
@@ -30,18 +33,7 @@ export function Settings({ back }: { back: () => void }) {
       <div className="space-y-4">
         <BackupSection />
         <RestoreSection />
-        <Section title="Move to another app">
-          <p className="mb-3 text-sm text-muted">
-            Copy your accounts into Google Authenticator, Aegis, 2FAS or any other app — so you&apos;re never stuck in {BRAND.name}.
-          </p>
-          <button
-            onClick={() => (window.location.hash = "export")}
-            disabled={!vault.entries.length}
-            className={`${secondaryButton} w-full`}
-          >
-            <Icon name="upload" size={18} /> Export accounts
-          </button>
-        </Section>
+        <SwitchApps />
         <Section title="Auto-lock">
           <Field label="Lock after the app has been in the background for" hint="Idle on screen gets five times as long.">
             <select
@@ -298,6 +290,55 @@ function RestoreSection() {
         </div>
       )}
       {error && <p className="mt-3 text-sm text-warn" role="alert">{error}</p>}
+    </Section>
+  );
+}
+
+// -- switching apps ---------------------------------------------------------
+
+function SwitchApps() {
+  const vault = useVault();
+  const [error, setError] = useState<string | null>(null);
+
+  async function pick(file: File | undefined) {
+    setError(null);
+    if (!file) return;
+    if (file.size > 5_000_000) return setError("That file is too big to be an authenticator export.");
+    try {
+      const result = parseImportFile(await file.text());
+      if (!result.drafts.length && !result.skipped.length) return setError("No accounts found in that file.");
+      setPendingImport(result);
+      window.location.hash = "add";
+    } catch (err) {
+      setError(err instanceof ParseError ? err.message : "Couldn't read that file.");
+    }
+  }
+
+  return (
+    <Section title="Switch apps">
+      <p className="mb-3 text-sm text-muted">
+        Bring accounts in from Aegis, 2FAS, Bitwarden or Ente Auth, or copy yours out to Google Authenticator or any other app.
+      </p>
+      <div className="space-y-2">
+        {/* A real label around a clipped input: phone browsers ignore script clicks on hidden file inputs. */}
+        <label className={`${secondaryButton} w-full cursor-pointer`}>
+          <input
+            type="file"
+            accept=".json,.txt,.2fas,application/json,text/plain"
+            className="sr-only"
+            onChange={(e) => {
+              pick(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          <Icon name="download" size={18} /> Import from another app
+        </label>
+        <button onClick={() => (window.location.hash = "export")} disabled={!vault.entries.length} className={`${secondaryButton} w-full`}>
+          <Icon name="upload" size={18} /> Export to another app
+        </button>
+      </div>
+      {error && <p className="mt-3 text-sm text-warn" role="alert">{error}</p>}
+      <p className="mt-3 text-xs text-muted">Google Authenticator users: scan its transfer QR with Add → Scan a QR code instead.</p>
     </Section>
   );
 }

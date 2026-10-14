@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isValidBase32, normalizeBase32 } from "@/lib/base32";
 import { splitDuplicates } from "@/lib/entries";
 import { parseImportFile } from "@/lib/importers";
+import { takePendingImport } from "@/lib/pendingImport";
 import { isMigrationUri, parseMigration, parseOtpauth, ParseError } from "@/lib/otpauth";
 import { decodeFile, decodeImageData, toImageData } from "@/lib/qr";
 import type { Algorithm, EntryDraft } from "@/lib/types";
@@ -37,8 +38,13 @@ function interpret(text: string): Review {
 const reason = (err: unknown) => (err instanceof ParseError ? err.message : "Couldn't read that.");
 
 export function AddFlow({ back, done }: { back: () => void; done: () => void }) {
-  const [mode, setMode] = useState<Mode>("choose");
-  const [review, setReview] = useState<Review | null>(null);
+  // Arriving from Settings → Import with a file already read: go straight to review.
+  const [initial] = useState(() => {
+    const r = takePendingImport();
+    return r ? { drafts: r.drafts, skipped: r.skipped, source: r.format } : null;
+  });
+  const [mode, setMode] = useState<Mode>(initial ? "review" : "choose");
+  const [review, setReview] = useState<Review | null>(initial);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
 
