@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { BRAND } from "@/lib/brand";
 import { BiometricCancelledError, BiometricUnsupportedError } from "@/lib/biometric";
 import { BiometricMismatchError, passcodeAdvice, WrongPasscodeError } from "@/lib/crypto";
-import { useVault } from "@/lib/vault";
+import { passcodeCheckDue, PasscodeCheckDueError, PASSCODE_CHECK_DAYS, useVault } from "@/lib/vault";
 import { Mark } from "./Mark";
 import { dangerButton, Field, Icon, inputClass, primaryButton, secondaryButton } from "./ui";
 
@@ -95,6 +95,9 @@ export function Setup() {
 export function Lock() {
   const vault = useVault();
   const [forgot, setForgot] = useState(false);
+  // Read once when the lock screen appears; a stale answer for a minute is harmless.
+  const [checkDue] = useState(() => passcodeCheckDue(vault.meta));
+  const fingerprint = !!vault.biometricSince && !checkDue;
   const [passcode, setPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +139,8 @@ export function Lock() {
       await vault.unlockWithBiometric();
     } catch (err) {
       // Backing out of the system prompt is a choice, not an error.
-      if (!(err instanceof BiometricCancelledError)) {
+      if (err instanceof PasscodeCheckDueError) setError(err.message);
+      else if (!(err instanceof BiometricCancelledError)) {
         setError(
           err instanceof BiometricMismatchError
             ? `${err.message} Use your passcode.`
@@ -154,7 +158,16 @@ export function Lock() {
   return (
     <Shell>
       <Brand />
-      {vault.biometricSince && (
+      {vault.biometricSince && checkDue && (
+        <p className="mb-4 flex items-start gap-2 rounded-xl bg-accent-soft p-3 text-sm">
+          <Icon name="fingerprint" size={18} className="mt-0.5 shrink-0 text-accent" />
+          <span>
+            <strong>Monthly passcode check.</strong> Type your passcode this time so you don&apos;t forget it. Fingerprint unlock
+            comes straight back afterwards, for another {PASSCODE_CHECK_DAYS} days.
+          </span>
+        </p>
+      )}
+      {fingerprint && (
         <>
           <button type="button" onClick={biometric} disabled={busy} className={`${primaryButton} h-14 w-full text-lg`}>
             <Icon name="fingerprint" /> Unlock with fingerprint or face
@@ -173,12 +186,12 @@ export function Lock() {
           className={`${inputClass} h-14 text-center text-lg`}
           value={passcode}
           onChange={(e) => setPasscode(e.target.value)}
-          autoFocus={!vault.biometricSince}
+          autoFocus={!fingerprint}
           disabled={busy}
         />
         {error && <p className="text-center text-sm text-warn" role="alert">{error}</p>}
         <button
-          className={`${vault.biometricSince ? secondaryButton : primaryButton} h-14 w-full text-lg`}
+          className={`${fingerprint ? secondaryButton : primaryButton} h-14 w-full text-lg`}
           disabled={busy || !passcode || waitLeft > 0}
         >
           {busy ? "Unlocking…" : waitLeft ? `Try again in ${waitLeft}s` : "Unlock"}

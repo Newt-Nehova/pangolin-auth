@@ -259,3 +259,41 @@ describe("biometric (PRF) wrap", async () => {
     expect(prfWrapOf(twice)?.credentialId).toBe("Qg==");
   });
 }, 60_000);
+
+describe("export formats", async () => {
+  const { migrationBatches, otpauthList } = await import("./otpauth");
+  const many: EntryDraft[] = Array.from({ length: 23 }, (_, i) => ({
+    type: i === 5 ? "hotp" : "totp",
+    issuer: `Service ${i}`,
+    account: `user${i}@example.com`,
+    secret: base32Encode(crypto.getRandomValues(new Uint8Array(20))),
+    algorithm: i === 7 ? "SHA256" : "SHA1",
+    digits: i === 7 ? 8 : 6,
+    period: 30,
+    counter: i === 5 ? 12 : 0,
+  }));
+
+  it("splits Google transfer codes 10 per QR and round-trips every account", () => {
+    const uris = migrationBatches(many);
+    expect(uris).toHaveLength(3);
+    const parsed = uris.map(parseMigration);
+    expect(parsed.map((p) => [p.batchIndex, p.batchSize])).toEqual([[0, 3], [1, 3], [2, 3]]);
+    expect(parsed.flatMap((p) => p.drafts)).toEqual(many);
+  });
+
+  it("writes one otpauth link per line that parses back exactly", () => {
+    const lines = otpauthList(many).trim().split("\n");
+    expect(lines).toHaveLength(23);
+    expect(lines.map(parseOtpauth)).toEqual(many);
+  });
+});
+
+describe("monthly passcode check", async () => {
+  const { passcodeCheckDue, DEFAULT_META } = await import("./db");
+  const now = Date.parse("2026-10-14T12:00:00Z");
+  it("is due when never typed, or after 30 days", () => {
+    expect(passcodeCheckDue({ ...DEFAULT_META, lastPasscodeAt: null }, now)).toBe(true);
+    expect(passcodeCheckDue({ ...DEFAULT_META, lastPasscodeAt: "2026-10-01T12:00:00Z" }, now)).toBe(false);
+    expect(passcodeCheckDue({ ...DEFAULT_META, lastPasscodeAt: "2026-09-14T11:00:00Z" }, now)).toBe(true);
+  });
+});

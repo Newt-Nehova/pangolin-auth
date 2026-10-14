@@ -23,11 +23,19 @@ import {
   unlockVaultWithPrf,
   type VaultBlob,
 } from "./crypto";
-import { DEFAULT_META, loadMeta, loadVault, requestPersistence, saveMeta, saveVault, wipe, type Meta } from "./db";
+import { DEFAULT_META, PASSCODE_CHECK_DAYS, passcodeCheckDue, loadMeta, loadVault, requestPersistence, saveMeta, saveVault, wipe, type Meta } from "./db";
 import { newEntry } from "./entries";
 import type { Entry, EntryDraft } from "./types";
 
 type Status = "loading" | "new" | "locked" | "open" | "unsupported";
+
+export { PASSCODE_CHECK_DAYS, passcodeCheckDue };
+
+export class PasscodeCheckDueError extends Error {
+  constructor() {
+    super("Monthly check: type your passcode this time.");
+  }
+}
 
 interface VaultApi {
   status: Status;
@@ -39,6 +47,9 @@ interface VaultApi {
   create(passcode: string): Promise<void>;
   unlock(passcode: string): Promise<void>;
   unlockWithBiometric(): Promise<void>;
+  /** Re-checks who is holding the phone before something sensitive (export). Changes nothing. */
+  confirmIdentity(passcode: string): Promise<void>;
+  confirmIdentityWithBiometric(): Promise<void>;
   enableBiometric(passcode: string): Promise<void>;
   disableBiometric(): Promise<void>;
   lock(): void;
@@ -149,7 +160,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         keyRef.current = key;
         entriesRef.current = [];
         setEntries([]);
-        await writeMeta({ createdAt: new Date().toISOString() });
+        const stamp = new Date().toISOString();
+        await writeMeta({ createdAt: stamp, lastPasscodeAt: stamp });
         setStatus("open");
         setPersisted(await requestPersistence().catch(() => null));
       }),
@@ -162,18 +174,34 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       entriesRef.current = list;
       setEntries(list);
       setStatus("open");
+      await commit(() => writeMeta({ lastPasscodeAt: new Date().toISOString() }));
     },
 
     unlockWithBiometric: async () => {
       const blob = blobRef.current;
       const wrap = blob && prfWrapOf(blob);
       if (!blob || !wrap) throw new Error("Biometric unlock is not set up.");
+      if (passcodeCheckDue(metaRef.current)) throw new PasscodeCheckDueError();
       const secret = await evaluatePrf(wrap.credentialId, fromB64(wrap.prfSalt));
       const { key, entries: list } = await unlockVaultWithPrf(blob, secret);
       keyRef.current = key;
       entriesRef.current = list;
       setEntries(list);
       setStatus("open");
+    },
+
+    confirmIdentity: async (passcode) => {
+      const blob = blobRef.current;
+      if (!blob) throw new Error("No vault yet.");
+      await unlockVault(blob, passcode);
+      await commit(() => writeMeta({ lastPasscodeAt: new Date().toISOString() }));
+    },
+
+    confirmIdentityWithBiometric: async () => {
+      const blob = blobRef.current;
+      const wrap = blob && prfWrapOf(blob);
+      if (!blob || !wrap) throw new Error("Biometric unlock is not set up.");
+      await unlockVaultWithPrf(blob, await evaluatePrf(wrap.credentialId, fromB64(wrap.prfSalt)));
     },
 
     // The passcode is checked FIRST (inside addPrfWrap's unwrap would be too
@@ -189,6 +217,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         const next = await addPrfWrap(blob, passcode, credentialId, prfSalt, prfOutput);
         await saveVault(next);
         setBlob(next);
+        await writeMeta({ lastPasscodeAt: new Date().toISOString() });
         if (old) forgetPasskey(old.credentialId);
       }),
 
@@ -236,6 +265,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         const rewrapped = await rewrap(blob, current, next);
         await saveVault(rewrapped);
         setBlob(rewrapped);
+        await writeMeta({ lastPasscodeAt: new Date().toISOString() });
       }),
 
     setMeta: (patch) => commit(() => writeMeta(patch)),

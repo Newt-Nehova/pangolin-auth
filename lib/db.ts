@@ -15,6 +15,13 @@ export interface Meta {
   lastBackupAt: string | null;
   /** Bumped on every vault change; compared with lastBackupAt to know if a backup is stale. */
   lastChangeAt: string | null;
+  /**
+   * Last time the passcode itself was typed correctly. Fingerprint unlock
+   * stops working after 30 days without it, so the passcode -- the only way
+   * in after a biometric reset -- doesn't get forgotten. Not secret: editing
+   * it only skips a reminder, it never bypasses the fingerprint.
+   */
+  lastPasscodeAt: string | null;
   createdAt: string;
 }
 
@@ -22,8 +29,17 @@ export const DEFAULT_META: Meta = {
   autoLockSeconds: 60,
   lastBackupAt: null,
   lastChangeAt: null,
+  lastPasscodeAt: null,
   createdAt: new Date(0).toISOString(),
 };
+
+/** Fingerprint unlock pauses after this long without the passcode being typed. */
+export const PASSCODE_CHECK_DAYS = 30;
+
+export function passcodeCheckDue(meta: Meta, now = Date.now()): boolean {
+  if (!meta.lastPasscodeAt) return true;
+  return now - Date.parse(meta.lastPasscodeAt) > PASSCODE_CHECK_DAYS * 86_400_000;
+}
 
 let opening: Promise<IDBDatabase> | null = null;
 

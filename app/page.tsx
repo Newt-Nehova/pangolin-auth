@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AddFlow } from "@/components/AddFlow";
 import { EditEntry } from "@/components/EditEntry";
+import { Export } from "@/components/Export";
 import { Lock, Setup } from "@/components/Gate";
 import { Home } from "@/components/Home";
 import { Mark } from "@/components/Mark";
@@ -70,6 +71,7 @@ export default function App() {
 
   if (route === "add") return <AddFlow back={home} done={home} />;
   if (route === "settings") return <Settings back={home} />;
+  if (route === "export") return <Export back={home} />;
   if (route.startsWith("edit:")) return <EditEntry key={route} id={route.slice(5)} back={home} />;
   return <Home go={go} />;
 }

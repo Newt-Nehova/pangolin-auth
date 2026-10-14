@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { BiometricCancelledError, BiometricUnsupportedError, platformAuthenticatorAvailable } from "@/lib/biometric";
 import { BRAND } from "@/lib/brand";
+import { saveOrShare } from "@/lib/files";
 import { createBackup, isBackupFile, openBackup, passcodeAdvice, WrongPasscodeError, type BackupFile } from "@/lib/crypto";
 import { splitDuplicates, toDraft } from "@/lib/entries";
 import type { EntryDraft } from "@/lib/types";
@@ -28,6 +29,18 @@ export function Settings({ back }: { back: () => void }) {
       <div className="space-y-4">
         <BackupSection />
         <RestoreSection />
+        <Section title="Move to another app">
+          <p className="mb-3 text-sm text-muted">
+            Copy your accounts into Google Authenticator, Aegis, 2FAS or any other app — so you&apos;re never stuck in {BRAND.name}.
+          </p>
+          <button
+            onClick={() => (window.location.hash = "export")}
+            disabled={!vault.entries.length}
+            className={`${secondaryButton} w-full`}
+          >
+            <Icon name="upload" size={18} /> Export accounts
+          </button>
+        </Section>
         <Section title="Auto-lock">
           <Field label="Lock after the app has been in the background for" hint="Idle on screen gets five times as long.">
             <select
@@ -95,23 +108,7 @@ function BackupSection() {
     try {
       const file = await createBackup(vault.entries, password);
       const name = `${BRAND.name.toLowerCase()}-backup-${file.created.slice(0, 10)}.json`;
-      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
-      const asFile = new File([blob], name, { type: "application/json" });
-      // On phones the share sheet is the useful path: save to Files or Drive, or
-      // send it to yourself. Desktop falls back to an ordinary download.
-      if (navigator.canShare?.({ files: [asFile] })) {
-        try {
-          await navigator.share({ files: [asFile], title: name });
-        } catch (err) {
-          if ((err as DOMException).name === "AbortError") {
-            setBusy(false);
-            return; // cancelled: not backed up
-          }
-          download(blob, name);
-        }
-      } else {
-        download(blob, name);
-      }
+      if (!(await saveOrShare(JSON.stringify(file, null, 2), name, "application/json"))) return; // cancelled: not backed up
       await vault.setMeta({ lastBackupAt: new Date().toISOString() });
       toast("Backup saved");
       setOpen(false);
@@ -155,17 +152,6 @@ function BackupSection() {
       )}
     </Section>
   );
-}
-
-function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // -- restore ----------------------------------------------------------------

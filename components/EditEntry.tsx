@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { displayName } from "@/lib/entries";
+import { buildOtpauth } from "@/lib/otpauth";
 import { useVault } from "@/lib/vault";
+import { IdentityCheck } from "./IdentityCheck";
+import { QrImage } from "./QrImage";
 import { Field, Icon, inputClass, primaryButton, Screen, secondaryButton, useToast } from "./ui";
 
 export function EditEntry({ id, back }: { id: string; back: () => void }) {
@@ -62,8 +65,63 @@ export function EditEntry({ id, back }: { id: string; back: () => void }) {
           <dt className="text-muted">Added</dt>
           <dd>{new Date(entry.createdAt).toLocaleDateString()}</dd>
         </dl>
+        <ShowQr entryId={id} />
         <p className="text-sm text-muted">To remove an account, use Select on the main screen.</p>
       </div>
     </Screen>
+  );
+}
+
+/**
+ * This one account as a standard setup QR, for scanning into any other
+ * authenticator. Behind an identity check, and off the screen again after a
+ * minute or when the app is left.
+ */
+function ShowQr({ entryId }: { entryId: string }) {
+  const vault = useVault();
+  const [step, setStep] = useState<"closed" | "check" | "shown">("closed");
+  const entry = vault.entries.find((e) => e.id === entryId);
+
+  useEffect(() => {
+    if (step !== "shown") return;
+    const timer = window.setTimeout(() => setStep("closed"), 60_000);
+    const onHide = () => document.visibilityState === "hidden" && setStep("closed");
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [step]);
+
+  if (!entry) return null;
+
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-4 shadow-sm">
+      <h2 className="mb-2 font-semibold">Move this account</h2>
+      {step === "closed" && (
+        <>
+          <p className="mb-3 text-sm text-muted">Show its setup QR code to scan into another authenticator app or phone.</p>
+          <button onClick={() => setStep("check")} className={`${secondaryButton} w-full`}>
+            <Icon name="camera" size={18} /> Show QR code
+          </button>
+        </>
+      )}
+      {step === "check" && (
+        <IdentityCheck
+          why={<span className="text-muted">This QR code is the account&apos;s secret. Anyone who scans it can make its codes.</span>}
+          onConfirmed={() => setStep("shown")}
+          onCancel={() => setStep("closed")}
+        />
+      )}
+      {step === "shown" && (
+        <div className="space-y-3">
+          <QrImage value={buildOtpauth(entry)} label={`Setup QR code for ${displayName(entry)}`} size={240} />
+          <p className="text-center text-sm text-muted">Scan with the other app. This hides itself after a minute.</p>
+          <button onClick={() => setStep("closed")} className={`${primaryButton} w-full`}>
+            Done
+          </button>
+        </div>
+      )}
+    </section>
   );
 }

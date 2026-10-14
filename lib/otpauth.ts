@@ -220,8 +220,8 @@ export function parseMigration(uri: string): MigrationResult {
   return result;
 }
 
-/** Builds a migration URI. Used by the tests; also the basis for a future "export to Google Authenticator". */
-export function buildMigration(drafts: EntryDraft[]): string {
+/** Builds one Google Authenticator transfer URI (one QR code's worth). */
+export function buildMigration(drafts: EntryDraft[], batch = { index: 0, size: 1, id: 0 }): string {
   const bytes: number[] = [];
   const varint = (out: number[], n: number) => {
     let value = n;
@@ -254,9 +254,28 @@ export function buildMigration(drafts: EntryDraft[]): string {
     lenField(bytes, 1, new Uint8Array(inner));
   }
   intField(bytes, 2, 1);
-  intField(bytes, 3, 1);
-  intField(bytes, 4, 0);
+  intField(bytes, 3, batch.size);
+  intField(bytes, 4, batch.index);
+  intField(bytes, 5, batch.id);
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
   return `otpauth-migration://offline?data=${encodeURIComponent(btoa(binary))}`;
+}
+
+/**
+ * Splits accounts across several transfer QR codes, the way Google
+ * Authenticator itself does. Ten per code keeps each one small enough to scan
+ * reliably off a phone screen. HOTP accounts are included (Google supports them).
+ */
+export function migrationBatches(drafts: EntryDraft[], perCode = 10): string[] {
+  const size = Math.max(1, Math.ceil(drafts.length / perCode));
+  const id = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
+  return Array.from({ length: size }, (_, index) =>
+    buildMigration(drafts.slice(index * perCode, (index + 1) * perCode), { index, size, id })
+  );
+}
+
+/** One otpauth:// link per line: the format Aegis, 2FAS, Ente Auth and Bitwarden all import. */
+export function otpauthList(drafts: EntryDraft[]): string {
+  return drafts.map(buildOtpauth).join("\n") + "\n";
 }

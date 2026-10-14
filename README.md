@@ -11,7 +11,11 @@ Live: https://pangolin-auth.vercel.app
 - Add accounts by camera QR scan, QR screenshot, pasted `otpauth://` link, or typed key
 - Imports Google Authenticator "Transfer accounts" QR codes; skips duplicates
 - Passcode lock, auto-lock after time in the background, back-off on repeated wrong guesses
+- Fingerprint / face unlock (WebAuthn PRF), with a monthly passcode check so the passcode is
+  not forgotten; "Forgot passcode?" erase-and-start-over on the lock screen
 - Encrypted backup file + restore; a banner warns when accounts are not backed up
+- Export to other apps behind an identity check: Google Authenticator transfer QR codes,
+  an otpauth:// link list (Aegis, 2FAS, Ente Auth, Bitwarden), or one account's setup QR
 - Installable PWA, works fully offline
 
 ## Security design
