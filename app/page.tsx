@@ -6,7 +6,7 @@
  * key lives only in this page's memory: a real navigation would lock the vault.
  * Hash changes are history entries, so the phone's back gesture still works.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AddFlow } from "@/components/AddFlow";
 import { EditEntry } from "@/components/EditEntry";
 import { Export } from "@/components/Export";
@@ -37,9 +37,31 @@ function useHashRoute() {
   return { route, go, home };
 }
 
+/**
+ * A home-screen shortcut opens /?go=add or /?go=search. Read once, wiped from
+ * the address (so a reload doesn't replay it), and acted on after unlocking.
+ */
+const SHORTCUTS = ["add", "search"];
+function readShortcut(): string | null {
+  if (typeof window === "undefined") return null;
+  const go = new URLSearchParams(window.location.search).get("go");
+  if (!go) return null;
+  window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+  return SHORTCUTS.includes(go) ? go : null;
+}
+
 export default function App() {
   const vault = useVault();
   const { route, go, home } = useHashRoute();
+  const shortcut = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (shortcut.current === undefined) shortcut.current = readShortcut();
+    if (vault.status === "open" && shortcut.current) {
+      go(shortcut.current);
+      shortcut.current = null;
+    }
+  }, [vault.status, go]);
 
   // Locking or erasing must not leave the user on a screen they can no longer
   // use -- nor reopen it straight after they unlock or start a new vault.
@@ -73,5 +95,5 @@ export default function App() {
   if (route === "settings") return <Settings back={home} />;
   if (route === "export") return <Export back={home} />;
   if (route.startsWith("edit:")) return <EditEntry key={route} id={route.slice(5)} back={home} />;
-  return <Home go={go} />;
+  return <Home key={route} go={go} focusSearch={route === "search"} />;
 }

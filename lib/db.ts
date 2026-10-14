@@ -22,6 +22,10 @@ export interface Meta {
    * it only skips a reminder, it never bypasses the fingerprint.
    */
   lastPasscodeAt: string | null;
+  /** Overwrite the clipboard 30s after copying a code, if nothing else was copied since. */
+  clearClipboard: boolean;
+  /** One-line cards for long lists. */
+  compact: boolean;
   createdAt: string;
 }
 
@@ -30,6 +34,8 @@ export const DEFAULT_META: Meta = {
   lastBackupAt: null,
   lastChangeAt: null,
   lastPasscodeAt: null,
+  clearClipboard: true,
+  compact: false,
   createdAt: new Date(0).toISOString(),
 };
 

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isValidBase32, normalizeBase32 } from "@/lib/base32";
 import { splitDuplicates } from "@/lib/entries";
+import { parseImportFile } from "@/lib/importers";
 import { isMigrationUri, parseMigration, parseOtpauth, ParseError } from "@/lib/otpauth";
 import { decodeFile, decodeImageData, toImageData } from "@/lib/qr";
 import type { Algorithm, EntryDraft } from "@/lib/types";
@@ -14,6 +15,8 @@ type Mode = "choose" | "scan" | "paste" | "manual" | "review";
 interface Review {
   drafts: EntryDraft[];
   skipped: string[];
+  /** Where a file import came from, e.g. "Aegis". */
+  source?: string;
   batch?: { index: number; size: number };
 }
 
@@ -66,6 +69,20 @@ export function AddFlow({ back, done }: { back: () => void; done: () => void }) 
     }
   }
 
+  async function onImportFile(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    if (file.size > 5_000_000) return setError("That file is too big to be an authenticator export.");
+    try {
+      const result = parseImportFile(await file.text());
+      if (!result.drafts.length && !result.skipped.length) return setError("No accounts found in that file.");
+      setReview({ drafts: result.drafts, skipped: result.skipped, source: result.format });
+      setMode("review");
+    } catch (err) {
+      setError(reason(err));
+    }
+  }
+
   const goBack = () => {
     setError(null);
     if (mode === "choose") back();
@@ -77,11 +94,12 @@ export function AddFlow({ back, done }: { back: () => void; done: () => void }) 
   if (mode === "manual") return <Manual onBack={goBack} onDraft={(d) => (setReview({ drafts: [d], skipped: [] }), setMode("review"))} />;
   if (mode === "review" && review) return <ReviewScreen review={review} onBack={goBack} done={done} />;
 
-  const options: { icon: string; title: string; text: string; onClick?: () => void; file?: boolean }[] = [
+  const options: { icon: string; title: string; text: string; onClick?: () => void; file?: "image" | "export" }[] = [
     { icon: "camera", title: "Scan a QR code", text: "Point the camera at the code on screen", onClick: () => setMode("scan") },
-    { icon: "image", title: "From a screenshot", text: "Pick a picture that has the QR code in it", file: true },
+    { icon: "image", title: "From a screenshot", text: "Pick a picture that has the QR code in it", file: "image" },
     { icon: "link", title: "Paste a setup link", text: "otpauth://… or a Google Authenticator transfer", onClick: () => setMode("paste") },
     { icon: "keyboard", title: "Type the key in", text: "When the site shows a text key instead", onClick: () => setMode("manual") },
+    { icon: "upload", title: "Import from another app", text: "An export file from Aegis, 2FAS, Bitwarden or Ente Auth", file: "export" },
   ];
 
   return (
@@ -106,7 +124,19 @@ export function AddFlow({ back, done }: { back: () => void; done: () => void }) 
                 // A real label for a clipped (not display:none) input: some phone
                 // browsers ignore script-triggered clicks on hidden file inputs.
                 <label className={cls}>
-                  <input type="file" accept="image/*" className="sr-only" onChange={(e) => onImage(e.target.files?.[0])} />
+                  {o.file === "image" ? (
+                    <input type="file" accept="image/*" className="sr-only" onChange={(e) => onImage(e.target.files?.[0])} />
+                  ) : (
+                    <input
+                      type="file"
+                      accept=".json,.txt,.2fas,application/json,text/plain"
+                      className="sr-only"
+                      onChange={(e) => {
+                        onImportFile(e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                  )}
                   {body}
                 </label>
               ) : (
@@ -350,6 +380,11 @@ function ReviewScreen({ review, onBack, done }: { review: Review; onBack: () => 
   const count = items.filter((i) => i.keep).length;
   return (
     <Screen title={single ? "Check and save" : `Import ${review.drafts.length} accounts`} onBack={onBack}>
+      {review.source && (
+        <p className="mb-4 text-sm text-muted">
+          From your {review.source} export. Once these are saved here, delete the export file — it isn&apos;t encrypted.
+        </p>
+      )}
       {review.batch && (
         <p className="mb-4 rounded-xl bg-accent-soft p-3 text-sm">
           This is QR code {review.batch.index + 1} of {review.batch.size} from Google Authenticator. Save these, then scan the next one.

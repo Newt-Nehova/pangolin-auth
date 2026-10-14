@@ -297,3 +297,99 @@ describe("monthly passcode check", async () => {
     expect(passcodeCheckDue({ ...DEFAULT_META, lastPasscodeAt: "2026-09-14T11:00:00Z" }, now)).toBe(true);
   });
 });
+
+describe("importing other apps' exports", async () => {
+  const { parseImportFile } = await import("./importers");
+  const S = "JBSWY3DPEHPK3PXP";
+
+  it("reads a plain Aegis export and skips Steam", () => {
+    const aegis = {
+      version: 1,
+      header: { slots: null, params: null },
+      db: {
+        version: 3,
+        entries: [
+          { type: "totp", uuid: "a", name: "duro@example.com", issuer: "GitHub", info: { secret: S, algo: "SHA1", digits: 6, period: 30 } },
+          { type: "hotp", uuid: "b", name: "vpn", issuer: "Work", info: { secret: S, algo: "SHA256", digits: 8, counter: 4 } },
+          { type: "steam", uuid: "c", name: "me", issuer: "Steam", info: { secret: S, algo: "SHA1", digits: 5, period: 30 } },
+        ],
+      },
+    };
+    const r = parseImportFile(JSON.stringify(aegis));
+    expect(r.format).toBe("Aegis");
+    expect(r.drafts).toHaveLength(2);
+    expect(r.drafts[1]).toMatchObject({ type: "hotp", algorithm: "SHA256", digits: 8, counter: 4, issuer: "Work" });
+    expect(r.skipped[0]).toMatch(/Steam/);
+  });
+
+  it("refuses an encrypted Aegis export with instructions", () => {
+    expect(() => parseImportFile(JSON.stringify({ version: 1, header: { slots: [{}], params: {} }, db: "c2VjcmV0" }))).toThrow(/encryption turned off/);
+  });
+
+  it("reads a plain 2FAS export", () => {
+    const twofas = {
+      schemaVersion: 4,
+      services: [
+        { name: "Google", secret: S, otp: { account: "duro@gmail.com", issuer: "Google", digits: 6, period: 30, algorithm: "SHA1", tokenType: "TOTP" } },
+        { name: "Steam", secret: S, otp: { tokenType: "STEAM" } },
+      ],
+    };
+    const r = parseImportFile(JSON.stringify(twofas));
+    expect(r.format).toBe("2FAS");
+    expect(r.drafts).toEqual([{ type: "totp", issuer: "Google", account: "duro@gmail.com", secret: S, algorithm: "SHA1", digits: 6, period: 30, counter: 0 }]);
+    expect(r.skipped).toHaveLength(1);
+  });
+
+  it("refuses a password-protected 2FAS export", () => {
+    expect(() => parseImportFile(JSON.stringify({ schemaVersion: 4, services: [], servicesEncrypted: "abc:def:ghi" }))).toThrow(/password-protected/);
+  });
+
+  it("reads Bitwarden: otpauth links, raw secrets, and ignores logins without 2FA", () => {
+    const bw = {
+      encrypted: false,
+      items: [
+        { name: "GitHub", login: { username: "duro", totp: `otpauth://totp/?secret=${S}` } },
+        { name: "Dropbox", login: { username: "me@x.com", totp: S.toLowerCase() } },
+        { name: "No 2FA", login: { username: "x", totp: null } },
+        { name: "Note", type: 2 },
+      ],
+    };
+    const r = parseImportFile(JSON.stringify(bw));
+    expect(r.format).toBe("Bitwarden");
+    expect(r.drafts.map((d) => [d.issuer, d.account, d.secret])).toEqual([
+      ["GitHub", "duro", S],
+      ["Dropbox", "me@x.com", S],
+    ]);
+  });
+
+  it("reads a plain list of links (Ente Auth) and reports bad lines", () => {
+    const text = `otpauth://totp/A:a?secret=${S}&issuer=A\r\n\r\notpauth://totp/B:b?secret=BAD!\nnot a link\notpauth://hotp/C:c?secret=${S}&counter=2\n`;
+    const r = parseImportFile(text);
+    expect(r.drafts.map((d) => d.issuer)).toEqual(["A", "C"]);
+    expect(r.skipped).toHaveLength(1);
+  });
+
+  it("sends Pangolin backups to Restore, and rejects junk", () => {
+    expect(() => parseImportFile(JSON.stringify({ format: "pangolin-backup", v: 1 }))).toThrow(/Restore/);
+    expect(() => parseImportFile("hello")).toThrow(ParseError);
+    expect(() => parseImportFile("{bad json")).toThrow(/damaged/);
+    expect(() => parseImportFile(JSON.stringify({ something: 1 }))).toThrow(/format/);
+  });
+
+  it("never lets a malformed secret through", () => {
+    const aegis = { header: {}, db: { entries: [{ type: "totp", issuer: "X", name: "x", info: { secret: "not base32!!", digits: 6, period: 30 } }] } };
+    const r = parseImportFile(JSON.stringify(aegis));
+    expect(r.drafts).toHaveLength(0);
+    expect(r.skipped).toHaveLength(1);
+  });
+});
+
+describe("clock check", async () => {
+  const { skewSeconds, describeSkew } = await import("./clock");
+  it("measures and describes skew", () => {
+    expect(skewSeconds(100_000, 40_000)).toBe(60);
+    expect(skewSeconds(40_000, 100_000)).toBe(-60);
+    expect(describeSkew(45)).toBe("This phone's clock is 45 seconds fast");
+    expect(describeSkew(-300)).toBe("This phone's clock is 5 minutes slow");
+  });
+});

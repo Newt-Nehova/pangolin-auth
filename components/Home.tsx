@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BRAND } from "@/lib/brand";
 import { matchesQuery } from "@/lib/entries";
+import { clockSkew, describeSkew, SKEW_WARN_SECONDS } from "@/lib/clock";
 import { warmQrReader } from "@/lib/qr";
 import { useVault } from "@/lib/vault";
 import { CodeCard } from "./CodeCard";
@@ -33,7 +34,7 @@ function useNow(): number {
   return now;
 }
 
-export function Home({ go }: { go: (route: string) => void }) {
+export function Home({ go, focusSearch = false }: { go: (route: string) => void; focusSearch?: boolean }) {
   const vault = useVault();
   const toast = useToast();
   const now = useNow();
@@ -43,6 +44,16 @@ export function Home({ go }: { go: (route: string) => void }) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(warmQrReader, []);
+
+  // A wrong clock makes every code wrong; say so before the user finds out the hard way.
+  const [skew, setSkew] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    clockSkew().then((s) => live && s !== null && Math.abs(s) >= SKEW_WARN_SECONDS && setSkew(s));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const list = useMemo(() => vault.entries.filter((e) => matchesQuery(e, query)), [vault.entries, query]);
   const { meta, entries } = vault;
@@ -107,6 +118,18 @@ export function Home({ go }: { go: (route: string) => void }) {
       </header>
 
       <main className="flex-1 px-4 pb-40 pt-4">
+        {skew !== null && !selecting && (
+          <div role="alert" className="mb-4 flex items-start gap-3 rounded-2xl border border-warn/40 bg-warn/10 p-4 text-sm">
+            <Icon name="alert" className="mt-0.5 shrink-0 text-warn" />
+            <span>
+              <strong className="block text-ink">{describeSkew(skew)}</strong>
+              <span className="text-muted">
+                Codes are made from the time, so sites may reject them. In your phone&apos;s settings, set the date and time to
+                automatic.
+              </span>
+            </span>
+          </div>
+        )}
         {unbacked && !selecting && (
           <button
             onClick={() => go("settings")}
@@ -122,7 +145,7 @@ export function Home({ go }: { go: (route: string) => void }) {
           </button>
         )}
 
-        {entries.length > 4 && (
+        {(entries.length > 4 || focusSearch) && entries.length > 0 && (
           <div className="relative mb-4">
             <Icon name="search" size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
             <input
@@ -132,6 +155,7 @@ export function Home({ go }: { go: (route: string) => void }) {
               className={`${inputClass} pl-10`}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              autoFocus={focusSearch}
             />
           </div>
         )}

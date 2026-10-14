@@ -16,6 +16,11 @@ Live: https://pangolin-auth.vercel.app
 - Encrypted backup file + restore; a banner warns when accounts are not backed up
 - Export to other apps behind an identity check: Google Authenticator transfer QR codes,
   an otpauth:// link list (Aegis, 2FAS, Ente Auth, Bitwarden), or one account's setup QR
+- Imports Aegis, 2FAS and Bitwarden exports and plain otpauth:// lists (encrypted exports are
+  refused with instructions); every record is re-validated
+- Clock check against the site's own Date header (no third party); warns when codes would fail
+- Copied codes clear after 30 s while the app is open; haptic tap on copy (Android)
+- Home-screen shortcuts: Add account, Search
 - Installable PWA, works fully offline
 
 ## Security design

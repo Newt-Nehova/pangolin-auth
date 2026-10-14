@@ -4,6 +4,7 @@ import { memo, useEffect, useState } from "react";
 import { badgeHue, displayName } from "@/lib/entries";
 import { generate, groupCode, secondsLeft, timeStep } from "@/lib/otp";
 import type { Entry } from "@/lib/types";
+import { copyCode } from "@/lib/clipboard";
 import { useVault } from "@/lib/vault";
 import { Icon, useToast } from "./ui";
 
@@ -49,17 +50,9 @@ function Ring({ left, period }: { left: number; period: number }) {
   );
 }
 
-async function copy(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function TotpCard({ entry, now, onEdit, selecting, selected, onToggle }: CardProps) {
   const toast = useToast();
+  const { meta } = useVault();
   const step = timeStep(now, entry.period);
   const left = secondsLeft(now, entry.period);
   const [codes, setCodes] = useState<{ step: number; now: string; next: string } | null>(null);
@@ -80,7 +73,7 @@ function TotpCard({ entry, now, onEdit, selecting, selected, onToggle }: CardPro
   async function tap() {
     if (selecting) return onToggle();
     if (!code) return;
-    toast((await copy(code)) ? `Copied ${groupCode(code)}` : "Couldn't copy — long-press the code instead");
+    toast((await copyCode(code, meta.clearClipboard)) ? `Copied ${groupCode(code)}` : "Couldn't copy — long-press the code instead");
   }
 
   return (
@@ -115,7 +108,7 @@ function HotpCard({ entry, onEdit, selecting, selected, onToggle }: CardProps) {
       const value = await generate(entry);
       await vault.update(entry.id, { counter: entry.counter + 1 });
       setCode(value);
-      toast((await copy(value)) ? `Copied ${groupCode(value)}` : "New code ready");
+      toast((await copyCode(value, vault.meta.clearClipboard)) ? `Copied ${groupCode(value)}` : "New code ready");
     } finally {
       setBusy(false);
     }
@@ -123,7 +116,7 @@ function HotpCard({ entry, onEdit, selecting, selected, onToggle }: CardProps) {
 
   async function tap() {
     if (selecting) return onToggle();
-    if (code) toast((await copy(code)) ? `Copied ${groupCode(code)}` : "Couldn't copy");
+    if (code) toast((await copyCode(code, vault.meta.clearClipboard)) ? `Copied ${groupCode(code)}` : "Couldn't copy");
   }
 
   return (

@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { BiometricCancelledError, BiometricUnsupportedError, platformAuthenticatorAvailable } from "@/lib/biometric";
 import { BRAND } from "@/lib/brand";
+import { clockSkew, describeSkew, SKEW_WARN_SECONDS } from "@/lib/clock";
 import { saveOrShare } from "@/lib/files";
 import { createBackup, isBackupFile, openBackup, passcodeAdvice, WrongPasscodeError, type BackupFile } from "@/lib/crypto";
 import { splitDuplicates, toDraft } from "@/lib/entries";
@@ -58,6 +59,20 @@ export function Settings({ back }: { back: () => void }) {
         </Section>
         <BiometricSection />
         <PasscodeSection />
+        <Section title="Privacy">
+          <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent)]"
+              checked={vault.meta.clearClipboard}
+              onChange={(e) => vault.setMeta({ clearClipboard: e.target.checked })}
+            />
+            <span>
+              <span className="block font-medium">Clear copied codes after 30 seconds</span>
+              <span className="text-muted">Works while {BRAND.name} is open; browsers don&apos;t allow it from the background.</span>
+            </span>
+          </label>
+        </Section>
         <Section title="This device">
           <ul className="space-y-2 text-sm">
             <li className="flex items-start gap-2">
@@ -72,10 +87,7 @@ export function Settings({ back }: { back: () => void }) {
               <Icon name="shield" size={18} className="mt-0.5 shrink-0 text-ok" />
               <span>Accounts and their names are encrypted (AES-256). Nothing leaves this phone. The app makes no network requests with your data.</span>
             </li>
-            <li className="flex items-start gap-2">
-              <Icon name="alert" size={18} className="mt-0.5 shrink-0 text-muted" />
-              <span>Codes depend on this phone&apos;s clock. If codes are rejected, set the date and time to automatic.</span>
-            </li>
+            <ClockRow />
           </ul>
         </Section>
         <EraseSection />
@@ -84,6 +96,32 @@ export function Settings({ back }: { back: () => void }) {
         </p>
       </div>
     </Screen>
+  );
+}
+
+function ClockRow() {
+  const [skew, setSkew] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    clockSkew().then((s) => live && setSkew(s));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const off = typeof skew === "number" && Math.abs(skew) >= SKEW_WARN_SECONDS;
+  return (
+    <li className="flex items-start gap-2">
+      <Icon name={off ? "alert" : skew === undefined || skew === null ? "refresh" : "check"} size={18} className={`mt-0.5 shrink-0 ${off ? "text-warn" : skew === null || skew === undefined ? "text-muted" : "text-ok"}`} />
+      <span>
+        {skew === undefined
+          ? "Checking this phone's clock…"
+          : skew === null
+            ? "Couldn't check the clock (offline). Codes are made from the time, so keep date and time set to automatic."
+            : off
+              ? `${describeSkew(skew)}. Set the date and time to automatic, or sites may reject your codes.`
+              : `Clock checked: correct to within ${Math.max(1, Math.abs(skew))} second${Math.abs(skew) > 1 ? "s" : ""}.`}
+      </span>
+    </li>
   );
 }
 
