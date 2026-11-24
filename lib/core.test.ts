@@ -330,13 +330,13 @@ describe("importing other apps' exports", async () => {
     const twofas = {
       schemaVersion: 4,
       services: [
-        { name: "Google", secret: S, otp: { account: "duro@gmail.com", issuer: "Google", digits: 6, period: 30, algorithm: "SHA1", tokenType: "TOTP" } },
+        { name: "Google", secret: S, otp: { account: "someone@gmail.com", issuer: "Google", digits: 6, period: 30, algorithm: "SHA1", tokenType: "TOTP" } },
         { name: "Steam", secret: S, otp: { tokenType: "STEAM" } },
       ],
     };
     const r = parseImportFile(JSON.stringify(twofas));
     expect(r.format).toBe("2FAS");
-    expect(r.drafts).toEqual([{ type: "totp", issuer: "Google", account: "duro@gmail.com", secret: S, algorithm: "SHA1", digits: 6, period: 30, counter: 0 }]);
+    expect(r.drafts).toEqual([{ type: "totp", issuer: "Google", account: "someone@gmail.com", secret: S, algorithm: "SHA1", digits: 6, period: 30, counter: 0 }]);
     expect(r.skipped).toHaveLength(1);
   });
 
@@ -401,8 +401,8 @@ describe("logos", async () => {
     expect(logoFor("github.com")?.title).toBe("GitHub");
     expect(logoFor("Google Workspace")?.title).toBe("Google");
     expect(logoFor("Twitter")?.title).toBe("X");
-    expect(logoFor("", "duro@gmail.com")?.title).toBe("Google");
-    expect(logoFor("Standard Bank", "duro@gmail.com")).toBeNull();
+    expect(logoFor("", "someone@gmail.com")?.title).toBe("Google");
+    expect(logoFor("Standard Bank", "someone@gmail.com")).toBeNull();
     expect(logoFor("Microsoft")).toBeNull(); // not in Simple Icons: letter badge
   });
   it("picks readable ink for the brand colour", () => {

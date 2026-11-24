@@ -5,6 +5,10 @@ and stored only on the device: no account, no server, no cloud sync.
 
 Live: https://pangolin-auth.vercel.app
 
+> **Status:** a personal project. The crypto uses only the browser's Web Crypto API and is covered
+> by the RFC test vectors, but it has not been independently audited. Keep an encrypted backup.
+> MIT licensed.
+
 ## Features
 
 - 6–8 digit codes with a countdown ring; tap to copy; the next code shows in the last 8 seconds
